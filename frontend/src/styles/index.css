@@ -1,0 +1,290 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #080a0d;
+  --color-ink-soft: #0c1015;
+  --color-panel: #11171e;
+  --color-panel-raised: #171f28;
+  --color-paper: #f1e8d8;
+  --color-paper-dim: #d8cebd;
+  --color-muted: #9aa5b1;
+  --color-brass: #c8a96e;
+  --color-brass-bright: #e8ce9a;
+  --color-signal: #b84b40;
+  --color-signal-bright: #e47b6d;
+  --color-moss: #7f9e85;
+
+  --font-display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino,
+    Georgia, serif;
+  --font-sans: "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "SFMono-Regular", "Cascadia Code", Consolas, "Liberation Mono", monospace;
+}
+
+@layer base {
+  * {
+    border-color: color-mix(in srgb, var(--color-paper) 12%, transparent);
+  }
+
+  html {
+    color-scheme: dark;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    margin: 0;
+    min-width: 320px;
+    min-height: 100vh;
+    background-color: var(--color-ink);
+    color: var(--color-paper);
+    font-family: var(--font-sans);
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    background-image:
+      radial-gradient(ellipse at 12% -5%, rgba(200, 169, 110, 0.12), transparent 45%),
+      radial-gradient(ellipse at 90% 8%, rgba(184, 75, 64, 0.08), transparent 38%),
+      radial-gradient(ellipse at 50% 110%, rgba(200, 169, 110, 0.06), transparent 42%);
+    background-attachment: fixed;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: -1;
+    opacity: 0.18;
+    background-image:
+      linear-gradient(rgba(241, 232, 216, 0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(241, 232, 216, 0.06) 1px, transparent 1px);
+    background-size: 64px 64px;
+    mask-image: radial-gradient(ellipse at 50% 20%, black, transparent 78%);
+  }
+
+  ::selection {
+    background: var(--color-brass);
+    color: var(--color-ink);
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  a {
+    color: inherit;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-brass-bright);
+    outline-offset: 3px;
+  }
+
+  input,
+  select,
+  textarea {
+    accent-color: var(--color-brass);
+  }
+
+  textarea::placeholder,
+  input::placeholder {
+    color: color-mix(in srgb, var(--color-muted) 72%, transparent);
+  }
+
+  img {
+    max-width: 100%;
+  }
+}
+
+@layer components {
+  .case-grid {
+    background-image:
+      linear-gradient(rgba(200, 169, 110, 0.16) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(200, 169, 110, 0.16) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  .paper-lines {
+    background-image: repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent 27px,
+      rgba(241, 232, 216, 0.055) 27px,
+      rgba(241, 232, 216, 0.055) 28px
+    );
+  }
+
+  .file-edge {
+    position: relative;
+  }
+
+  .file-edge::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: linear-gradient(to bottom, var(--color-brass), transparent 75%);
+  }
+
+  .stamp {
+    border: 1px solid color-mix(in srgb, var(--color-brass) 55%, transparent);
+    color: color-mix(in srgb, var(--color-brass-bright) 90%, transparent);
+    transform: rotate(-3deg);
+    letter-spacing: 0.18em;
+  }
+
+  .hairline {
+    height: 1px;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--color-brass) 45%, transparent),
+      transparent
+    );
+  }
+
+  .field {
+    width: 100%;
+    border-radius: 2px;
+    border: 1px solid color-mix(in srgb, var(--color-paper) 16%, transparent);
+    background: color-mix(in srgb, var(--color-ink) 65%, transparent);
+    color: var(--color-paper);
+    padding: 0.7rem 0.8rem;
+    font-size: 0.92rem;
+    transition: border-color 150ms ease, background-color 150ms ease;
+  }
+
+  .field:hover {
+    border-color: color-mix(in srgb, var(--color-brass) 35%, transparent);
+  }
+
+  .field:focus {
+    border-color: var(--color-brass);
+    background: var(--color-ink);
+    outline: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brass) 18%, transparent);
+  }
+
+  .field[aria-invalid="true"] {
+    border-color: var(--color-signal);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-signal) 14%, transparent);
+  }
+
+  .choice {
+    position: relative;
+    display: flex;
+    cursor: pointer;
+    align-items: flex-start;
+    gap: 0.65rem;
+    border: 1px solid color-mix(in srgb, var(--color-paper) 12%, transparent);
+    border-radius: 2px;
+    padding: 0.7rem 0.8rem;
+    transition: border-color 150ms ease, background-color 150ms ease;
+  }
+
+  .choice:hover {
+    border-color: color-mix(in srgb, var(--color-brass) 40%, transparent);
+    background: color-mix(in srgb, var(--color-brass) 4%, transparent);
+  }
+
+  .choice:has(input:checked) {
+    border-color: color-mix(in srgb, var(--color-brass) 60%, transparent);
+    background: color-mix(in srgb, var(--color-brass) 8%, transparent);
+  }
+
+  .choice:has(input:focus-visible) {
+    outline: 2px solid var(--color-brass-bright);
+    outline-offset: 2px;
+  }
+
+  .choice input {
+    margin-top: 0.2rem;
+  }
+
+  .evidence-card {
+    border: 1px solid color-mix(in srgb, var(--color-paper) 11%, transparent);
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--color-panel) 78%, transparent);
+    transition: border-color 150ms ease, background-color 150ms ease,
+      transform 150ms ease;
+  }
+
+  .evidence-card:hover {
+    border-color: color-mix(in srgb, var(--color-brass) 36%, transparent);
+    background: color-mix(in srgb, var(--color-panel-raised) 90%, transparent);
+  }
+
+  .evidence-card[data-selected="true"] {
+    border-color: color-mix(in srgb, var(--color-brass) 65%, transparent);
+    background: color-mix(in srgb, var(--color-brass) 7%, var(--color-panel));
+  }
+
+  .chat-bubble {
+    border: 1px solid color-mix(in srgb, var(--color-paper) 9%, transparent);
+    background: color-mix(in srgb, var(--color-ink) 45%, transparent);
+    border-radius: 2px 10px 10px 10px;
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--color-brass) 35%, transparent) transparent;
+  }
+
+  .animate-enter {
+    animation: enter 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .animate-enter-delayed {
+    animation: enter 520ms cubic-bezier(0.22, 1, 0.36, 1) 90ms both;
+  }
+
+  dialog::backdrop {
+    background: rgba(3, 5, 8, 0.78);
+    backdrop-filter: blur(5px);
+  }
+
+  dialog[open] {
+    animation: enter 220ms ease-out both;
+  }
+}
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

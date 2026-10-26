@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" width="1200" height="760" role="img" aria-labelledby="diagram-title diagram-desc">
+  <title id="diagram-title">Gallery 4 service route — simulated security briefing diagram</title>
+  <desc id="diagram-desc">A fictional floor-plan diagram of Halcyon House. Gallery 4 connects to a service corridor watched by Camera 3, a maintenance lift, and a loading dock. A dashed line marks an unobserved route while Camera 3 is in a 94-second maintenance loop.</desc>
+  <defs>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#c8a96e" stroke-opacity="0.10" stroke-width="1"/>
+    </pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#e47b6d"/>
+    </marker>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="760" fill="#0b0e13"/>
+  <rect width="1200" height="760" fill="url(#grid)"/>
+
+  <g font-family="Inter, 'Segoe UI', Arial, sans-serif">
+    <text x="56" y="62" fill="#e8ce9a" font-size="13" letter-spacing="4">HALCYON HOUSE · SECURITY BRIEFING</text>
+    <text x="56" y="104" fill="#f1e8d8" font-size="32" font-weight="600">Gallery 4 service route</text>
+    <text x="56" y="132" fill="#9aa5b1" font-size="14">Floor plan excerpt — 17 October 2026, evening preview</text>
+    <text x="1144" y="66" text-anchor="end" fill="#b84b40" font-size="12" letter-spacing="3">SIMULATED / FICTIONAL</text>
+    <line x1="56" y1="154" x2="1144" y2="154" stroke="#c8a96e" stroke-opacity="0.35"/>
+
+    <!-- Main hall -->
+    <rect x="72" y="190" width="380" height="300" fill="#151c24" stroke="#f1e8d8" stroke-opacity="0.22"/>
+    <text x="96" y="224" fill="#f1e8d8" font-size="18" font-weight="600">MAIN HALL</text>
+    <text x="96" y="246" fill="#9aa5b1" font-size="12">Public route · guests and preview</text>
+    <circle cx="176" cy="344" r="14" fill="none" stroke="#c8a96e" stroke-opacity="0.5"/>
+    <circle cx="176" cy="344" r="4" fill="#c8a96e" fill-opacity="0.6"/>
+    <text x="200" y="349" fill="#9aa5b1" font-size="12">fountain</text>
+    <circle cx="346" cy="288" r="5" fill="#7f9e85"/>
+    <text x="360" y="292" fill="#a9c0ad" font-size="12">CAMERA 4 — main hall</text>
+
+    <!-- East salon -->
+    <rect x="72" y="518" width="250" height="156" fill="#151c24" stroke="#f1e8d8" stroke-opacity="0.22"/>
+    <text x="96" y="550" fill="#f1e8d8" font-size="17" font-weight="600">EAST SALON</text>
+    <text x="96" y="572" fill="#9aa5b1" font-size="12">Toast · 21:32–21:56</text>
+
+    <!-- Gallery 4 -->
+    <rect x="486" y="190" width="270" height="300" fill="#1b222b" stroke="#c8a96e" stroke-opacity="0.72" stroke-width="2"/>
+    <text x="512" y="226" fill="#e8ce9a" font-size="19" font-weight="600">GALLERY 4</text>
+    <text x="512" y="248" fill="#9aa5b1" font-size="12">Sealed public gallery</text>
+    <rect x="560" y="286" width="122" height="82" fill="#0d1116" stroke="#f1e8d8" stroke-opacity="0.35"/>
+    <text x="621" y="322" text-anchor="middle" fill="#d8cebd" font-size="11">DISPLAY CASE</text>
+    <text x="621" y="340" text-anchor="middle" fill="#9aa5b1" font-size="10">Meridian Sphere</text>
+    <rect x="616" y="286" width="10" height="82" fill="#c8a96e" fill-opacity="0.25"/>
+    <text x="512" y="456" fill="#9aa5b1" font-size="12">Public doors locked 21:15</text>
+
+    <!-- Service corridor -->
+    <rect x="786" y="190" width="150" height="300" fill="#201b1a" stroke="#e47b6d" stroke-opacity="0.55" stroke-dasharray="6 4"/>
+    <text x="861" y="224" text-anchor="middle" fill="#e47b6d" font-size="12" font-weight="600" letter-spacing="1.4">SERVICE</text>
+    <text x="861" y="242" text-anchor="middle" fill="#e47b6d" font-size="12" font-weight="600" letter-spacing="1.4">CORRIDOR S2</text>
+    <circle cx="861" cy="334" r="5" fill="#7f9e85"/>
+    <text x="861" y="358" text-anchor="middle" fill="#a9c0ad" font-size="11">CAMERA 3</text>
+    <rect x="820" y="408" width="82" height="34" fill="#0d1116" stroke="#f1e8d8" stroke-opacity="0.3"/>
+    <text x="861" y="430" text-anchor="middle" fill="#d8cebd" font-size="10">DOOR S2</text>
+
+    <!-- Maintenance lift -->
+    <rect x="966" y="284" width="136" height="112" fill="#151c24" stroke="#f1e8d8" stroke-opacity="0.28"/>
+    <text x="1034" y="326" text-anchor="middle" fill="#f1e8d8" font-size="13" font-weight="600">MAINTENANCE</text>
+    <text x="1034" y="346" text-anchor="middle" fill="#f1e8d8" font-size="13" font-weight="600">LIFT</text>
+    <text x="1034" y="368" text-anchor="middle" fill="#9aa5b1" font-size="10">service floor</text>
+
+    <!-- Loading dock -->
+    <rect x="966" y="518" width="136" height="156" fill="#151c24" stroke="#f1e8d8" stroke-opacity="0.28"/>
+    <text x="1034" y="556" text-anchor="middle" fill="#f1e8d8" font-size="13" font-weight="600">LOADING</text>
+    <text x="1034" y="574" text-anchor="middle" fill="#f1e8d8" font-size="13" font-weight="600">DOCK L1</text>
+    <text x="1034" y="600" text-anchor="middle" fill="#9aa5b1" font-size="10">van access</text>
+
+    <!-- Kitchen -->
+    <rect x="486" y="518" width="270" height="156" fill="#151c24" stroke="#f1e8d8" stroke-opacity="0.18"/>
+    <text x="512" y="552" fill="#d8cebd" font-size="14" font-weight="600">SERVICE KITCHEN</text>
+    <text x="512" y="574" fill="#9aa5b1" font-size="11">Catering route</text>
+
+    <!-- Connections / doors -->
+    <line x1="452" y1="340" x2="486" y2="340" stroke="#f1e8d8" stroke-opacity="0.3" stroke-width="8"/>
+    <line x1="756" y1="340" x2="786" y2="340" stroke="#f1e8d8" stroke-opacity="0.3" stroke-width="8"/>
+    <line x1="936" y1="340" x2="966" y2="340" stroke="#f1e8d8" stroke-opacity="0.3" stroke-width="8"/>
+    <line x1="1034" y1="396" x2="1034" y2="518" stroke="#f1e8d8" stroke-opacity="0.22" stroke-width="8"/>
+    <line x1="756" y1="596" x2="786" y2="596" stroke="#f1e8d8" stroke-opacity="0.18" stroke-width="8"/>
+    <line x1="936" y1="596" x2="966" y2="596" stroke="#f1e8d8" stroke-opacity="0.18" stroke-width="8"/>
+
+    <!-- Route -->
+    <path d="M 621 286 L 621 170 L 861 170 L 861 300 L 1034 300 L 1034 518 L 1034 596 L 966 596"
+          fill="none" stroke="#e47b6d" stroke-width="3" stroke-dasharray="10 8" marker-end="url(#arrow)" filter="url(#glow)"/>
+    <text x="636" y="162" fill="#e47b6d" font-size="12" letter-spacing="1">UNOBSERVED ROUTE WHILE CAMERA 3 LOOPS</text>
+
+    <!-- Camera 3 loop callout -->
+    <rect x="382" y="560" width="0" height="0" fill="none"/>
+    <rect x="60" y="696" width="1084" height="1" fill="#c8a96e" fill-opacity="0.3"/>
+    <g transform="translate(56, 714)">
+      <rect x="0" y="0" width="24" height="24" fill="#201b1a" stroke="#e47b6d" stroke-opacity="0.7"/>
+      <text x="38" y="17" fill="#e47b6d" font-size="12" font-weight="600">CAMERA 3 LOOP · 94 SECONDS</text>
+      <text x="290" y="17" fill="#9aa5b1" font-size="12">21:46:00–21:47:34 · maintenance console override</text>
+    </g>
+    <g transform="translate(720, 714)">
+      <rect x="0" y="0" width="24" height="24" fill="#151c24" stroke="#7f9e85" stroke-opacity="0.7"/>
+      <text x="38" y="17" fill="#a9c0ad" font-size="12">CAMERA 7 · east wing</text>
+      <text x="238" y="17" fill="#9aa5b1" font-size="12">no movement 21:44–22:02</text>
+    </g>
+    <text x="1144" y="742" text-anchor="end" fill="#6f7883" font-size="10" letter-spacing="2">SIMULATED ASSET · NOT A REAL FLOOR PLAN</text>
+  </g>
+</svg>

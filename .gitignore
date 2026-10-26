@@ -1,0 +1,15 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.vite/
+test-results/
+playwright-report/
+blob-report/
+.mongodb-binaries/
+.cache/
+.vercel/
