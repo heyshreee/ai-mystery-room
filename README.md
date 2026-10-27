@@ -10,7 +10,7 @@ AI Mystery Room is a fictional detective game. A guest submits a scenario or ope
 - **CI:** [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) runs lint, typecheck, build, backend/frontend tests, and Playwright on every push and pull request.
 - **CD:** Vercel Git integration deploys `main` to production automatically.
 
-The Vite frontend, SPA fallback, and serverless API entry point are deployed. The API is **not yet usable** because the Vercel project has no reachable production MongoDB: `GET /api/health` fails after the MongoDB selection timeout. Set `MONGODB_URI` to a hosted database in the Vercel project, redeploy, and verify `/api/health` returns `200` before treating the deployment as complete.
+The Vite frontend, SPA fallback, and serverless API entry point are deployed. The API is **not yet usable** because the Vercel project has no reachable production MongoDB: `GET /api/health` returns `503` with `database: "disconnected"` after the MongoDB selection timeout. Set `MONGODB_URI` to a hosted database in the Vercel project, redeploy, and verify `/api/health` returns `200` before treating the deployment as complete.
 
 ## Current scope
 
@@ -233,7 +233,7 @@ Required Vercel environment variables (Production and Preview):
 
 | Variable | Purpose |
 | --- | --- |
-| `MONGODB_URI` | Reachable MongoDB connection string with authentication/TLS. **Currently a local placeholder; the API cannot start without a hosted value.** |
+| `MONGODB_URI` | Reachable MongoDB connection string with authentication/TLS. **Currently a local placeholder; the API runs in a degraded `503` state until this points at a hosted database.** |
 | `SESSION_SECRET` | Random value of at least 32 characters. |
 | `FRONTEND_ORIGIN` | Comma-separated HTTPS origins allowed to send credentialed requests. Vercel's deployment hostnames are added automatically. |
 | `TRUST_PROXY` | `1` on Vercel so Express trusts the platform proxy. |
@@ -272,7 +272,7 @@ Last verified: **2026-10-26** (Node 24, npm 11, WSL2)
 | --- | --- |
 | Vercel Git CD | Passed — a push to `main` created a production deployment automatically |
 | Static frontend | Passed — `/` and `/cases/xyz` return `200` HTML |
-| API entry point | Deployed, but **not usable** — `/api/health` returns `500 FUNCTION_INVOCATION_FAILED` after the ~10s MongoDB selection timeout because `MONGODB_URI` is still a local placeholder |
+| API entry point | Deployed, but **not usable** — `/api/health` returns `503` JSON with `database: "disconnected"` after the ~10s MongoDB selection timeout because `MONGODB_URI` is still a local placeholder. Other API routes return the same `503 SERVICE_UNAVAILABLE` envelope. |
 
 The production frontend build emits Rollup notices about `@__PURE__` comments inside Zod's published files. They are third-party annotation warnings, not build failures.
 
