@@ -4,6 +4,14 @@ AI Mystery Room is a fictional detective game. A guest submits a scenario or ope
 
 `SPEC.md` remains the product source of truth. Phases 1–5 are implemented, including asynchronous custom generation, a provider-neutral runtime adapter, static fictional media, browser E2E, and accessibility checks. A live model endpoint has **not** been verified because no provider credentials are part of this repository.
 
+## Live deployment
+
+- **App:** <https://ai-mystery-room-git.vercel.app>
+- **CI:** [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) runs lint, typecheck, build, backend/frontend tests, and Playwright on every push and pull request.
+- **CD:** Vercel Git integration deploys `main` to production automatically.
+
+The Vite frontend, SPA fallback, and serverless API entry point are deployed. The API is **not yet usable** because the Vercel project has no reachable production MongoDB: `GET /api/health` fails after the MongoDB selection timeout. Set `MONGODB_URI` to a hosted database in the Vercel project, redeploy, and verify `/api/health` returns `200` before treating the deployment as complete.
+
 ## Current scope
 
 **Available now**
@@ -214,13 +222,31 @@ See [`docs/architecture.md`](./docs/architecture.md) for request flow, generatio
 
 ## Production deployment
 
-No live deployment is included or verified by this repository. A deployment must provide its own Node host, static host, MongoDB service, HTTPS termination, and backup policy.
+The live deployment uses Vercel:
 
-- Run `npm run build`. Serve `frontend/dist` as static assets with an SPA history fallback to `index.html`, and run the API with `node backend/dist/server.js`.
-- Set `NODE_ENV=production`, a strong `SESSION_SECRET`, a production `MONGODB_URI` with authentication/TLS, and the exact comma-separated `FRONTEND_ORIGIN` values that may send credentialed requests. Cookies become `Secure` in production, so the site must be served over HTTPS.
-- Set `TRUST_PROXY=1` only behind a trusted reverse proxy that sanitizes forwarding headers. Keep health checks on `GET /api/health`, ship structured logs to the platform, and avoid logging prompts or solutions.
+- [`vercel.json`](./vercel.json) builds the Vite frontend into `frontend/dist`, configures the Node.js function, and routes non-API paths to `index.html`.
+- [`api/[...].js`](./api/[...].js) re-exports the prebuilt Express app from `backend/dist/vercel.js`.
+- The Vercel project is linked to `heyshreee/ai-mystery-room`, so a push to `main` creates a production deployment without a separate deploy workflow.
+- `AI_PROVIDER=mock` and `MEDIA_PROVIDER=static` keep generation deterministic and network-free. No live model or media provider is configured.
+
+Required Vercel environment variables (Production and Preview):
+
+| Variable | Purpose |
+| --- | --- |
+| `MONGODB_URI` | Reachable MongoDB connection string with authentication/TLS. **Currently a local placeholder; the API cannot start without a hosted value.** |
+| `SESSION_SECRET` | Random value of at least 32 characters. |
+| `FRONTEND_ORIGIN` | Comma-separated HTTPS origins allowed to send credentialed requests. Vercel's deployment hostnames are added automatically. |
+| `TRUST_PROXY` | `1` on Vercel so Express trusts the platform proxy. |
+| `AI_PROVIDER` | `mock` for the deterministic generator. |
+| `MEDIA_PROVIDER` | `static` for the committed fictional evidence asset. |
+
+Operational notes:
+
+- Run `npm run build` locally to reproduce the deployment build. The serverless entry point is `backend/dist/vercel.js`; the standalone server remains `backend/dist/server.js`.
+- Cookies become `Secure` in production, so the site must be served over HTTPS. Keep health checks on `GET /api/health`, ship structured logs to the platform, and avoid logging prompts or solutions.
 - Do not expose MongoDB publicly. Configure backups and retention for cases and sessions, and test a restore before relying on it. User-written scenarios and generated cases can contain arbitrary text.
-- Run one API process unless generation is moved to a durable queue and rate limits to a shared store. Horizontal scaling with the current in-process worker is unsafe.
+- Generation jobs run inside the API process. The HTTP contract is asynchronous, but the worker is not durable; use a durable queue and worker leases before relying on serverless restarts or multiple replicas.
+- Rate limits are in-memory and reset on restart; multi-instance deployment needs a shared store.
 - Verify the selected AI provider, model, quotas, and latency separately. `AI_PROVIDER=mock` is deterministic and network-free, not a live model.
 
 ## Verified status
@@ -232,12 +258,21 @@ Last verified: **2026-10-26** (Node 24, npm 11, WSL2)
 | `npm run typecheck` | Passed |
 | `npm run lint` | Passed — 0 errors, 0 warnings |
 | `npm run build` | Passed — shared/backend emitted; frontend bundle built |
-| Backend tests | **74 passed** across 8 files |
+| Backend tests | **75 passed** across 8 files |
 | Frontend tests | **24 passed** across 5 files |
 | Playwright E2E | **6 passed** across 2 files |
 | Accessibility | Axe reports **zero** WCAG A/AA violations on landing, creation, investigation, accusation dialog, and results at desktop and mobile widths |
 | Browser flow | Sample journey, correct and incorrect accusations with reveal, custom mock generation, generation failure/retry, mobile layout, and solution isolation passed |
 | Dependency audit | `npm audit` reports **0 vulnerabilities** (production and full dependency trees) |
+| GitHub Actions CI | Passed on `4cb8650`; [run 40532964772](https://github.com/heyshreee/ai-mystery-room/actions/runs/40532964772) completed successfully |
+
+### Deployment verification (2026-10-27)
+
+| Check | Result |
+| --- | --- |
+| Vercel Git CD | Passed — a push to `main` created a production deployment automatically |
+| Static frontend | Passed — `/` and `/cases/xyz` return `200` HTML |
+| API entry point | Deployed, but **not usable** — `/api/health` returns `500 FUNCTION_INVOCATION_FAILED` after the ~10s MongoDB selection timeout because `MONGODB_URI` is still a local placeholder |
 
 The production frontend build emits Rollup notices about `@__PURE__` comments inside Zod's published files. They are third-party annotation warnings, not build failures.
 
@@ -247,5 +282,5 @@ The production frontend build emits Rollup notices about `@__PURE__` comments in
 - **No live media** — static diagram and text fallback only.
 - **No durable queue** — single-process generation only; no horizontal worker scaling.
 - **No load/performance or visual-regression tests.**
-- **No real deployment verification** — the built API and frontend are exercised together by E2E, but no live environment, backup/restore drill, or provider-quota validation has been performed.
+- **Live API not verified** — the static frontend and Git-based CD are live, but the API is blocked on a production MongoDB URI. No backup/restore drill or provider-quota validation has been performed.
 - **Guest cookies, not accounts** — no recovery after cookie loss.
