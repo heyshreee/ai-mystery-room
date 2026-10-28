@@ -277,7 +277,7 @@ Last verified: **2026-10-28** (Node 24, npm 11, WSL2)
 | Browser flow | Sample journey, correct and incorrect accusations with reveal, custom mock generation, generation failure/retry, mobile layout, and solution isolation passed |
 | Dependency audit | `npm audit` reports **0 vulnerabilities** (production and full dependency trees) |
 | Supabase preflight | **Passed** against the production database through the pooler: schema initialization, sample game loop, hints, accusation/results, 404s, custom mock generation to `ready`, and cleanup |
-| GitHub Actions CI | Passed on `4cb8650`; the Postgres commit is verified after push |
+| GitHub Actions CI | Passed on `ab5bdce`; [run 40716492708](https://github.com/heyshreee/ai-mystery-room/actions/runs/40716492708) completed successfully |
 
 ### Deployment verification
 
@@ -285,9 +285,16 @@ The Postgres port is re-verified on the live deployment after it is pushed. Resu
 
 | Check | Result |
 | --- | --- |
-| Vercel Git CD | Pending redeploy of the Postgres port |
-| Static frontend | Verified previously — `/` and `/cases/xyz` return `200` HTML |
-| Live API | Pending — to be checked with `GET /api/health`, sample play, custom generation, and 404 behavior |
+| Vercel Git CD | Passed — a push to `main` created a production deployment for `ab5bdce` automatically |
+| Static frontend | Passed — `/` and `/cases/xyz` return `200` HTML |
+| Nested API routing | Passed — `/api/cases/:id` reaches Express. The first deployment exposed a platform-level 404 for nested `/api` paths; routing was changed to rewrite every `/api/*` request to one function. |
+| Live API health | Passed — `GET /api/health` returns `200` with `database: "connected"`, `aiProvider: "mock"`, and `mediaProvider: "static"` |
+| Live sample play | Passed — sample creation, case/evidence reads, session creation, progress, hint, correct accusation, and authorized results |
+| Live custom generation | Passed — a custom brief returned `202`, polling reached `ready`, and the generated case was readable |
+| Live error behavior | Passed — unknown case and unknown route return JSON `404`; a malformed case ID returns `400` |
+| Test data cleanup | Passed — all live verification cases were deleted from `amr.cases`; the tables were empty afterward |
+
+The live verification used the same Supabase project and `DATABASE_URL` configured for Production. It did not exercise a live model provider or live media generation.
 
 The production frontend build emits Rollup notices about `@__PURE__` comments inside Zod's published files. They are third-party annotation warnings, not build failures.
 
