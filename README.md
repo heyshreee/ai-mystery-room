@@ -236,7 +236,7 @@ See [`docs/architecture.md`](./docs/architecture.md) for request flow, generatio
 The live deployment uses Vercel:
 
 - [`vercel.json`](./vercel.json) builds the Vite frontend into `frontend/dist`, configures the Node.js function, and routes non-API paths to `index.html`.
-- [`api/[...].js`](./api/[...].js) re-exports the prebuilt Express app from `backend/dist/vercel.js`.
+- [`api/[...path].js`](./api/[...path].js) re-exports the prebuilt Express app from `backend/dist/vercel.js` for every nested `/api` path.
 - The Vercel project is linked to `heyshreee/ai-mystery-room`, so a push to `main` creates a production deployment without a separate deploy workflow.
 - `AI_PROVIDER=mock` and `MEDIA_PROVIDER=static` keep generation deterministic and network-free. No live model or media provider is configured.
 
