@@ -95,7 +95,7 @@ Turn a small user-provided story or scenario into a coherent, interactive myster
 - Optional hints with a configurable limit.
 - Final accusation flow.
 - Server-side correctness evaluation and solution reveal.
-- Persistence in MongoDB.
+- Persistence in PostgreSQL.
 - AI provider abstraction, bounded retries, timeout handling, and invalid-output validation.
 - Seeded sample case so the app is usable without an AI provider.
 - Automated tests for the core game loop and critical security rules.
@@ -136,7 +136,7 @@ These are initial assumptions for implementation. Change them only with an expli
 | Frontend | React + Vite + TypeScript |
 | Styling | Tailwind CSS |
 | Backend | Node.js + Express + TypeScript |
-| Database | MongoDB using Mongoose |
+| Database | PostgreSQL (Supabase in production; PGlite in tests) |
 | API style | REST under `/api` |
 | AI coding tool | OpenCode is used by the developer to build and maintain the project |
 | Runtime AI | A separately configured model API or local inference endpoint |
@@ -147,7 +147,7 @@ These are initial assumptions for implementation. Change them only with an expli
 | Accusations | One final accusation per game session in the MVP |
 | Hints | Limited, server-controlled, and recorded in session state |
 | Language | English for MVP |
-| Hosting | Any compatible frontend host, Node host, and MongoDB service |
+| Hosting | Any compatible frontend host, Node host, and PostgreSQL service |
 | Case visibility | A case is private to its creator/session unless public sharing is explicitly added later |
 
 Before implementing a major feature, OpenCode should surface any assumption that has become consequential.
@@ -171,7 +171,7 @@ Before implementing a major feature, OpenCode should surface any assumption that
 - Node.js LTS compatible with deployment platform
 - Express
 - TypeScript
-- Mongoose
+- PostgreSQL via `pg` (Supabase pooler in production)
 - Zod for request and AI-output validation
 - Structured logging
 - A security middleware stack, including secure headers and rate limiting
@@ -205,7 +205,7 @@ Express API
   |
   +--> Media Provider Adapter -> Optional image/video provider
   |
-  +--> MongoDB
+  +--> PostgreSQL (isolated `amr` schema)
 ```
 
 ### 4.3 Architectural rules
@@ -540,7 +540,7 @@ CCTV evidence may be a transcript, timestamped log, still image, or optional vid
 
 ## 8. Data model
 
-Use MongoDB collections with Mongoose schemas and explicit indexes. All documents should have created/updated timestamps where relevant.
+Use PostgreSQL tables with explicit DDL and indexes in an isolated `amr` schema. The API applies the idempotent schema on startup. All rows have created/updated timestamps where relevant.
 
 ### 8.1 Case
 
@@ -548,7 +548,7 @@ Suggested fields:
 
 ```ts
 interface CaseDocument {
-  _id: ObjectId;
+  _id: string;
   title: string;
   scenario: string;
   summary: string;
@@ -556,8 +556,8 @@ interface CaseDocument {
   difficulty: "easy" | "medium" | "hard";
   status: "generating" | "validating" | "ready" | "failed";
   creatorSessionId: string;
-  suspectIds: ObjectId[];
-  evidenceIds: ObjectId[];
+  suspectIds: string[];
+  evidenceIds: string[];
   generationVersion: string;
   createdAt: Date;
   updatedAt: Date;
@@ -570,8 +570,8 @@ Never put the canonical culprit or hidden solution in a public case response. Th
 
 ```ts
 interface SuspectDocument {
-  _id: ObjectId;
-  caseId: ObjectId;
+  _id: string;
+  caseId: string;
   displayName: string;
   role: string;
   profile: string;
@@ -579,10 +579,10 @@ interface SuspectDocument {
   opportunitySummary: string;
   publicStatement: string;
   relationshipSummaries: Array<{
-    otherSuspectId: ObjectId;
+    otherSuspectId: string;
     relationship: string;
   }>;
-  portraitAssetId?: ObjectId;
+  portraitAssetId?: string;
   createdAt: Date;
 }
 ```
@@ -593,8 +593,8 @@ Do not send internal truth labels, hidden motive details, or culprit flags to th
 
 ```ts
 interface EvidenceDocument {
-  _id: ObjectId;
-  caseId: ObjectId;
+  _id: string;
+  caseId: string;
   type: EvidenceType;
   title: string;
   publicDescription: string;
@@ -602,7 +602,7 @@ interface EvidenceDocument {
   occurredAt?: Date;
   sourceLabel: string;
   reliability: "low" | "medium" | "high" | "unknown";
-  relatedSuspectIds: ObjectId[];
+  relatedSuspectIds: string[];
   relatedTimelineEventIds: string[];
   mediaStatus?: "not_required" | "pending" | "ready" | "failed";
   mediaUrl?: string;
@@ -617,9 +617,9 @@ Keep internal clue meaning and hidden truth metadata in a private solution/clue 
 
 ```ts
 interface SolutionDocument {
-  _id: ObjectId;
-  caseId: ObjectId;
-  culpritSuspectId: ObjectId;
+  _id: string;
+  caseId: string;
+  culpritSuspectId: string;
   canonicalTimeline: Array<{
     eventId: string;
     at: string;
@@ -630,7 +630,7 @@ interface SolutionDocument {
   motive: string;
   method: string;
   explanation: string;
-  supportingEvidenceIds: ObjectId[];
+  supportingEvidenceIds: string[];
   hintTexts: string[];
   validationStatus: "pending" | "valid" | "invalid";
   createdAt: Date;
@@ -643,13 +643,13 @@ This collection is backend-only. Do not expose it through a general case endpoin
 
 ```ts
 interface GameSessionDocument {
-  _id: ObjectId;
-  caseId: ObjectId;
+  _id: string;
+  caseId: string;
   guestTokenHash: string;
   status: "investigating" | "completed" | "expired";
-  viewedEvidenceIds: ObjectId[];
+  viewedEvidenceIds: string[];
   hintsUsed: number;
-  accusationSuspectId?: ObjectId;
+  accusationSuspectId?: string;
   isCorrect?: boolean;
   score?: number;
   startedAt: Date;
@@ -670,9 +670,9 @@ Track generation ID, case ID if created, status, stage, attempts, safe error cod
 - Index evidence by `caseId` and type.
 - Index sessions by case and expiration.
 - Use unique or idempotency constraints where needed.
-- Validate all ObjectId references.
-- Apply TTL indexes only when their expiration behavior matches product requirements.
-- Avoid returning raw Mongoose documents directly. Use explicit response DTOs.
+- Validate all ID references.
+- Expire sessions by checking `expires_at`; there is no database TTL job.
+- Avoid returning raw database rows directly. Use explicit response DTOs.
 
 ---
 
@@ -992,7 +992,7 @@ Test:
 - Case generation using a mocked AI provider.
 - Invalid structured output and retry limits.
 - Provider timeout and provider outage.
-- MongoDB persistence and reference integrity.
+- PostgreSQL persistence and referential integrity.
 - Session authorization.
 - Cross-case ID substitution attempts.
 - Evidence progress persistence.
@@ -1030,7 +1030,8 @@ Provide a documented `.env.example` similar to:
 NODE_ENV=development
 PORT=4000
 FRONTEND_ORIGIN=http://localhost:5173
-MONGODB_URI=mongodb://127.0.0.1:27017/ai_mystery_room
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/postgres
+DATABASE_SSL=disable
 
 # Runtime AI provider: configure only after selecting a real provider.
 AI_PROVIDER=mock
@@ -1074,7 +1075,7 @@ Rules:
 README must explain:
 1. Prerequisites and supported Node version.
 2. How to install dependencies.
-3. How to start MongoDB locally or configure a MongoDB URI.
+3. How to start PostgreSQL locally or configure `DATABASE_URL`.
 4. How to copy `.env.example` to a local environment file.
 5. How to run frontend and backend in development.
 6. How to run lint, type-check, tests, and production builds.
@@ -1087,9 +1088,9 @@ README must explain:
 
 - Deploy frontend and backend with explicit environment configuration.
 - Set the production frontend origin in CORS configuration.
-- Use HTTPS and a managed MongoDB deployment or secured database.
+- Use HTTPS and a managed PostgreSQL deployment or secured database.
 - Configure health checks, timeouts, and logging.
-- Do not expose MongoDB publicly without appropriate access controls.
+- Do not expose PostgreSQL publicly without appropriate access controls.
 - Configure provider quotas and rate limits.
 - Test the deployed build with both sample and AI-generated cases.
 - Document database backup and recovery procedures.
@@ -1113,7 +1114,7 @@ README must explain:
 
 - Establish frontend/backend structure and TypeScript.
 - Configure environment validation.
-- Connect MongoDB.
+- Connect PostgreSQL and apply the idempotent `amr` schema.
 - Add API error handling, logging, and health endpoint.
 - Build shared types and request schemas.
 - Create a coherent design system and navigation.

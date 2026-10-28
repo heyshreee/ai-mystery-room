@@ -1,4 +1,4 @@
-import { Types } from "mongoose";
+import { newId } from "../utils/ids.js";
 import {
   SAMPLE_CASE_KEY,
   SAMPLE_FICTION_NOTICE,
@@ -729,16 +729,16 @@ export interface InstantiatedSampleCase {
 }
 
 export function instantiateSampleCase(): InstantiatedSampleCase {
-  const caseId = new Types.ObjectId();
-  const generationId = new Types.ObjectId();
-  const suspectIds = new Map<string, Types.ObjectId>();
-  const evidenceIds = new Map<string, Types.ObjectId>();
+  const caseId = newId();
+  const generationId = newId();
+  const suspectIds = new Map<string, string>();
+  const evidenceIds = new Map<string, string>();
 
   for (const suspect of SAMPLE_CASE_DEFINITION.suspects) {
-    suspectIds.set(suspect.key, new Types.ObjectId());
+    suspectIds.set(suspect.key, newId());
   }
   for (const evidence of SAMPLE_CASE_DEFINITION.evidence) {
-    evidenceIds.set(evidence.key, new Types.ObjectId());
+    evidenceIds.set(evidence.key, newId());
   }
 
   const suspectDocs: InstantiatedSampleCase["suspectDocs"] =
@@ -815,7 +815,7 @@ export function instantiateSampleCase(): InstantiatedSampleCase {
   };
 
   const solutionDoc: InstantiatedSampleCase["solutionDoc"] = {
-    _id: new Types.ObjectId(),
+    _id: newId(),
     caseId,
     culpritSuspectId: required(suspectIds.get(SAMPLE_CASE_DEFINITION.culpritKey), "culprit"),
     canonicalTimeline,

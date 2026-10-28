@@ -10,7 +10,7 @@ AI Mystery Room is a fictional detective game. A guest submits a scenario or ope
 - **CI:** [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) runs lint, typecheck, build, backend/frontend tests, and Playwright on every push and pull request.
 - **CD:** Vercel Git integration deploys `main` to production automatically.
 
-The Vite frontend, SPA fallback, and serverless API entry point are deployed. The API is **not yet usable** because the Vercel project has no reachable production MongoDB: `GET /api/health` returns `503` with `database: "disconnected"` after the MongoDB selection timeout. Set `MONGODB_URI` to a hosted database in the Vercel project, redeploy, and verify `/api/health` returns `200` before treating the deployment as complete.
+Production storage is Supabase PostgreSQL. The API connects through the Supabase transaction pooler and keeps its tables in an isolated `amr` schema, which it creates and indexes on startup. The live deployment is re-verified after each push; see [Verified status](#verified-status) for the latest observed results.
 
 ## Current scope
 
@@ -39,9 +39,10 @@ The Vite frontend, SPA fallback, and serverless API entry point are deployed. Th
 
 - Node.js **>= 22.12** (verified on Node 24 / npm 11)
 - npm workspaces (npm 10+ recommended)
-- MongoDB for local development and production-style runs
-- Network access on the first test run so `mongodb-memory-server` can download/cache its test binary
+- PostgreSQL 14+ for local development and production-style runs (Supabase runs PostgreSQL 17)
 - Chromium for Playwright (`npx playwright install chromium` if not already cached)
+
+The backend test suite and the E2E stack start an in-process PGlite database, so they need no running PostgreSQL instance and no network access.
 
 ## Setup
 
@@ -56,24 +57,21 @@ Generate a real session secret and put it in `.env`:
 node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 ```
 
-Set `MONGODB_URI` if MongoDB is not at the default:
+Start PostgreSQL. For example:
+
+```bash
+docker run --rm -p 5432:5432 --name amr-postgres \
+  -e POSTGRES_PASSWORD=postgres postgres:17
+```
+
+Point `DATABASE_URL` at it and choose an SSL mode:
 
 ```dotenv
-MONGODB_URI=mongodb://127.0.0.1:27017/ai_mystery_room
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/postgres
+DATABASE_SSL=disable
 ```
 
-Start MongoDB. For example:
-
-```bash
-mkdir -p .data/mongo
-mongod --dbpath .data/mongo
-```
-
-Or with Docker:
-
-```bash
-docker run --rm -p 27017:27017 --name amr-mongo mongo:8
-```
+The API applies its idempotent DDL at startup and creates the `amr` schema and its six tables if they do not exist. A non-superuser application role needs `USAGE` and `CREATE` on `amr`; it does not need permission to create schemas or databases.
 
 Then:
 
@@ -86,6 +84,18 @@ npm run dev
 - Health: <http://localhost:4000/api/health>
 
 Vite proxies `/api`, so browser requests are same-origin in development. `vite preview` uses the same proxy configuration for the E2E stack.
+
+### Database and SSL modes
+
+`DATABASE_URL` is the only connection setting. `DATABASE_SSL` selects transport security:
+
+| Value | Behavior | Use |
+| --- | --- | --- |
+| `require` | Encrypt and verify the server certificate | PostgreSQL behind a publicly trusted chain |
+| `no-verify` | Encrypt without verifying the certificate | Supabase's pooler, which currently presents a self-signed chain |
+| `disable` | Plaintext | Local development and PGlite-based tests |
+
+Production uses the Supabase transaction pooler on port `6543` with `DATABASE_SSL=no-verify`. The connection is still TLS-encrypted; only certificate authentication is skipped. A dedicated `amr_app` login owns no other schema and has no superuser, database-creation, or role-creation rights.
 
 ### Runtime AI provider
 
@@ -151,20 +161,21 @@ Generated cases are private to the creating guest. Clearing cookies loses access
 | `npm run typecheck` | Build `shared`, then typecheck backend and frontend |
 | `npm run lint` | ESLint across the repository |
 | `npm run test` | Build `shared`, then run backend and frontend unit/integration tests |
-| `npm run test:backend` | Backend unit and MongoDB integration tests |
+| `npm run test:backend` | Backend unit and PostgreSQL integration tests (PGlite over TCP) |
 | `npm run test:frontend` | Frontend component and flow tests |
-| `npm run test:e2e` | Build everything, then run Playwright with an ephemeral MongoDB |
+| `npm run test:e2e` | Build everything, then run Playwright with an ephemeral PGlite database |
 | `npm run test:e2e:report` | Open the last Playwright HTML report |
 
 Workspace commands are also available, e.g. `npm run test --workspace=@amr/backend`.
 
 ## Troubleshooting
 
-- **The API exits at startup with a configuration error.** Copy `.env.example` to `.env`, set `MONGODB_URI`, and replace `SESSION_SECRET` with a real random value. Configuration is validated once at startup.
-- **`MongooseServerSelectionError` or a database timeout.** The dev server expects a real MongoDB. Start the local instance from [Setup](#setup) or point `MONGODB_URI` at a reachable database. The automated tests use an ephemeral MongoDB and do not need this.
+- **The API exits at startup with a configuration error.** Copy `.env.example` to `.env`, set `DATABASE_URL`, and replace `SESSION_SECRET` with a real random value. Configuration is validated once at startup.
+- **The API reports `database: "disconnected"` or a connection error.** The dev server expects a real PostgreSQL. Start the local instance from [Setup](#setup) or point `DATABASE_URL` at a reachable database. Check `DATABASE_SSL`: PGlite and plain local PostgreSQL need `disable`, while Supabase's pooler needs `no-verify`. The automated tests start PGlite themselves and do not need this.
+- **Startup fails with `permission denied for schema amr`.** Grant the application role `USAGE` and `CREATE` on `amr`, or run the API once with the schema owner to create the tables.
 - **A custom brief fails immediately or reports a provider error.** Check `GET /api/health`. `AI_PROVIDER=mock` needs no configuration and is the default. `AI_PROVIDER=openai-compatible` requires `AI_BASE_URL` and `AI_MODEL`; a rejected or unreachable endpoint fails safely without publishing a partial case. The sample remains playable.
 - **Port `4000` or `5173` is already in use.** Stop the other process. The Vite proxy targets `127.0.0.1:4000`, so changing the API port also requires updating `frontend/vite.config.ts`.
-- **Playwright cannot launch Chromium.** Run `npx playwright install chromium`. The E2E stack downloads and caches MongoDB 8.0.4 on first use; ensure network access or pre-seed `backend/.cache/mongodb-binaries`.
+- **Playwright cannot launch Chromium.** Run `npx playwright install chromium`. The E2E stack starts its own PGlite database and needs no network access.
 - **The production build prints Rollup `@__PURE__` notices from Zod.** These are third-party annotation warnings, not build failures.
 - **A private custom case or session disappeared.** Access is cookie-scoped. Clearing cookies removes access; there are no accounts yet.
 
@@ -204,7 +215,7 @@ Generation status values are `pending`, `validating`, `ready`, and `failed`. Sta
 
 ```text
 shared/    Zod request schemas, constants, and API types
-backend/   Express API, MongoDB models, sample/generation pipelines, tests
+backend/   Express API, PostgreSQL repositories, sample/generation pipelines, tests
 frontend/  React + Vite UI, generation flow, investigation features, tests
 e2e/       Playwright specs and the self-contained E2E stack
 docs/      Architecture, testing notes, and decision records
@@ -215,7 +226,7 @@ See [`docs/architecture.md`](./docs/architecture.md) for request flow, generatio
 ## Durability and scaling
 
 - Generation jobs run inside the API process. The HTTP contract is asynchronous, but the worker is not durable.
-- On startup, unfinished cases/jobs are marked failed and partial documents are removed. The client can then retry instead of polling forever.
+- On startup, unfinished cases/jobs are marked failed and partial rows are removed. The client can then retry instead of polling forever.
 - This recovery assumes a single API process owns the database at startup.
 - Multiple API replicas, guaranteed delivery, and job survival during a restart require a durable queue and worker leases.
 - Rate limits are in-memory and reset on restart; multi-instance deployment needs a shared store.
@@ -233,7 +244,8 @@ Required Vercel environment variables (Production and Preview):
 
 | Variable | Purpose |
 | --- | --- |
-| `MONGODB_URI` | Reachable MongoDB connection string with authentication/TLS. **Currently a local placeholder; the API runs in a degraded `503` state until this points at a hosted database.** |
+| `DATABASE_URL` | Supabase transaction-pooler connection string for the dedicated `amr_app` role. Store it as an encrypted variable. |
+| `DATABASE_SSL` | `no-verify` for the Supabase pooler; the connection is encrypted but the self-signed chain is not verified. |
 | `SESSION_SECRET` | Random value of at least 32 characters. |
 | `FRONTEND_ORIGIN` | Comma-separated HTTPS origins allowed to send credentialed requests. Vercel's deployment hostnames are added automatically. |
 | `TRUST_PROXY` | `1` on Vercel so Express trusts the platform proxy. |
@@ -244,14 +256,14 @@ Operational notes:
 
 - Run `npm run build` locally to reproduce the deployment build. The serverless entry point is `backend/dist/vercel.js`; the standalone server remains `backend/dist/server.js`.
 - Cookies become `Secure` in production, so the site must be served over HTTPS. Keep health checks on `GET /api/health`, ship structured logs to the platform, and avoid logging prompts or solutions.
-- Do not expose MongoDB publicly. Configure backups and retention for cases and sessions, and test a restore before relying on it. User-written scenarios and generated cases can contain arbitrary text.
+- Do not expose PostgreSQL publicly. Use the pooler connection string, keep the application role least-privileged, configure backups and retention for cases and sessions, and test a restore before relying on it. User-written scenarios and generated cases can contain arbitrary text.
 - Generation jobs run inside the API process. The HTTP contract is asynchronous, but the worker is not durable; use a durable queue and worker leases before relying on serverless restarts or multiple replicas.
 - Rate limits are in-memory and reset on restart; multi-instance deployment needs a shared store.
 - Verify the selected AI provider, model, quotas, and latency separately. `AI_PROVIDER=mock` is deterministic and network-free, not a live model.
 
 ## Verified status
 
-Last verified: **2026-10-26** (Node 24, npm 11, WSL2)
+Last verified: **2026-10-28** (Node 24, npm 11, WSL2)
 
 | Check | Result |
 | --- | --- |
@@ -264,15 +276,18 @@ Last verified: **2026-10-26** (Node 24, npm 11, WSL2)
 | Accessibility | Axe reports **zero** WCAG A/AA violations on landing, creation, investigation, accusation dialog, and results at desktop and mobile widths |
 | Browser flow | Sample journey, correct and incorrect accusations with reveal, custom mock generation, generation failure/retry, mobile layout, and solution isolation passed |
 | Dependency audit | `npm audit` reports **0 vulnerabilities** (production and full dependency trees) |
-| GitHub Actions CI | Passed on `4cb8650`; [run 40532964772](https://github.com/heyshreee/ai-mystery-room/actions/runs/40532964772) completed successfully |
+| Supabase preflight | **Passed** against the production database through the pooler: schema initialization, sample game loop, hints, accusation/results, 404s, custom mock generation to `ready`, and cleanup |
+| GitHub Actions CI | Passed on `4cb8650`; the Postgres commit is verified after push |
 
-### Deployment verification (2026-10-27)
+### Deployment verification
+
+The Postgres port is re-verified on the live deployment after it is pushed. Results are recorded here only after observing them.
 
 | Check | Result |
 | --- | --- |
-| Vercel Git CD | Passed — a push to `main` created a production deployment automatically |
-| Static frontend | Passed — `/` and `/cases/xyz` return `200` HTML |
-| API entry point | Deployed, but **not usable** — `/api/health` returns `503` JSON with `database: "disconnected"` after the ~10s MongoDB selection timeout because `MONGODB_URI` is still a local placeholder. Other API routes return the same `503 SERVICE_UNAVAILABLE` envelope. |
+| Vercel Git CD | Pending redeploy of the Postgres port |
+| Static frontend | Verified previously — `/` and `/cases/xyz` return `200` HTML |
+| Live API | Pending — to be checked with `GET /api/health`, sample play, custom generation, and 404 behavior |
 
 The production frontend build emits Rollup notices about `@__PURE__` comments inside Zod's published files. They are third-party annotation warnings, not build failures.
 
@@ -282,5 +297,5 @@ The production frontend build emits Rollup notices about `@__PURE__` comments in
 - **No live media** — static diagram and text fallback only.
 - **No durable queue** — single-process generation only; no horizontal worker scaling.
 - **No load/performance or visual-regression tests.**
-- **Live API not verified** — the static frontend and Git-based CD are live, but the API is blocked on a production MongoDB URI. No backup/restore drill or provider-quota validation has been performed.
+- **No backup/restore drill or provider-quota validation** — production storage is Supabase PostgreSQL, but restore and quota behavior have not been exercised.
 - **Guest cookies, not accounts** — no recovery after cookie loss.

@@ -1,4 +1,4 @@
-import { Types } from "mongoose";
+import { newId } from "../utils/ids.js";
 import {
   FICTION_NOTICE,
   type EvidenceContent,
@@ -15,8 +15,8 @@ import type { GenerationRequest } from "./types.js";
 export interface BuildGeneratedCaseInput {
   blueprint: CaseBlueprint;
   request: GenerationRequest;
-  caseId: Types.ObjectId;
-  generationId: Types.ObjectId;
+  caseId: string;
+  generationId: string;
   creatorSessionId: string;
   provider: string;
   hintLimit: number;
@@ -33,14 +33,14 @@ export function buildGeneratedCaseDocuments(
   input: BuildGeneratedCaseInput,
 ): GeneratedCaseDocuments {
   const { blueprint, request, caseId, generationId, creatorSessionId, provider } = input;
-  const suspectIds = new Map<string, Types.ObjectId>();
-  const evidenceIds = new Map<string, Types.ObjectId>();
+  const suspectIds = new Map<string, string>();
+  const evidenceIds = new Map<string, string>();
 
   for (const suspect of blueprint.suspects) {
-    suspectIds.set(suspect.key, new Types.ObjectId());
+    suspectIds.set(suspect.key, newId());
   }
   for (const evidence of blueprint.evidence) {
-    evidenceIds.set(evidence.key, new Types.ObjectId());
+    evidenceIds.set(evidence.key, newId());
   }
 
   const suspectDocs: GeneratedCaseDocuments["suspectDocs"] = blueprint.suspects.map(
@@ -101,7 +101,7 @@ export function buildGeneratedCaseDocuments(
     if (!evidence) {
       throw new Error(`Generated blueprint is missing supporting evidence "${key}".`);
     }
-    const doc = evidenceDocs.find((entry) => entry._id.equals(required(evidenceIds.get(key), key)));
+    const doc = evidenceDocs.find((entry) => entry._id === required(evidenceIds.get(key), key));
     if (!doc) {
       throw new Error(`Generated blueprint could not map supporting evidence "${key}".`);
     }
@@ -144,7 +144,7 @@ export function buildGeneratedCaseDocuments(
   }));
 
   const solutionDoc: GeneratedCaseDocuments["solutionDoc"] = {
-    _id: new Types.ObjectId(),
+    _id: newId(),
     caseId,
     culpritSuspectId: required(
       suspectIds.get(blueprint.culpritKey),

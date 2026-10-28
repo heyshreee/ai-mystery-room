@@ -23,9 +23,9 @@ export function toSuspectView(
   suspect: SuspectDocument,
   allSuspects: SuspectDocument[],
 ): SuspectView {
-  const byId = new Map(allSuspects.map((entry) => [entry._id.toString(), entry] as const));
+  const byId = new Map(allSuspects.map((entry) => [entry._id, entry] as const));
   return {
-    id: suspect._id.toString(),
+    id: suspect._id,
     displayName: suspect.displayName,
     role: suspect.role,
     profile: suspect.profile,
@@ -33,9 +33,8 @@ export function toSuspectView(
     opportunitySummary: suspect.opportunitySummary,
     publicStatement: suspect.publicStatement,
     relationships: suspect.relationships.map((relationship) => ({
-      suspectId: relationship.otherSuspectId.toString(),
-      displayName:
-        byId.get(relationship.otherSuspectId.toString())?.displayName ?? "Unknown person",
+      suspectId: relationship.otherSuspectId,
+      displayName: byId.get(relationship.otherSuspectId)?.displayName ?? "Unknown person",
       relationship: relationship.relationship,
     })),
   };
@@ -51,7 +50,7 @@ export function toPublicCase(
   );
 
   return {
-    id: caseDoc._id.toString(),
+    id: caseDoc._id,
     title: caseDoc.title,
     summary: caseDoc.summary,
     category: caseDoc.category,
@@ -82,16 +81,16 @@ export function orderedSuspects(
   caseDoc: Pick<CaseDocument, "suspectIds">,
   suspectDocs: SuspectDocument[],
 ): SuspectDocument[] {
-  const byId = new Map(suspectDocs.map((suspect) => [suspect._id.toString(), suspect] as const));
+  const byId = new Map(suspectDocs.map((suspect) => [suspect._id, suspect] as const));
   return caseDoc.suspectIds
-    .map((id) => byId.get(id.toString()))
+    .map((id) => byId.get(id))
     .filter((suspect): suspect is SuspectDocument => Boolean(suspect));
 }
 
 export function toEvidenceSummary(evidence: EvidenceDocument): EvidenceSummary {
   return {
-    id: evidence._id.toString(),
-    caseId: evidence.caseId.toString(),
+    id: evidence._id,
+    caseId: evidence.caseId,
     exhibitNumber: evidence.exhibitNumber,
     type: evidence.type,
     title: evidence.title,
@@ -99,7 +98,7 @@ export function toEvidenceSummary(evidence: EvidenceDocument): EvidenceSummary {
     occurredAt: iso(evidence.occurredAt) ?? null,
     sourceLabel: evidence.sourceLabel,
     reliability: evidence.reliability,
-    relatedSuspectIds: evidence.relatedSuspectIds.map((id) => id.toString()),
+    relatedSuspectIds: [...evidence.relatedSuspectIds],
     relatedTimelineEventIds: [...evidence.relatedTimelineEventIds],
     mediaStatus: evidence.mediaStatus,
     ...(evidence.mediaUrl ? { mediaUrl: evidence.mediaUrl } : {}),
@@ -130,10 +129,10 @@ export function toSessionView(
   hintLimit: number,
 ): GameSessionView {
   return {
-    id: session._id.toString(),
-    caseId: session.caseId.toString(),
+    id: session._id,
+    caseId: session.caseId,
     status: session.status,
-    viewedEvidenceIds: session.viewedEvidenceIds.map((id) => id.toString()),
+    viewedEvidenceIds: [...session.viewedEvidenceIds],
     hintsUsed: session.hintsUsed,
     hintLimit,
     hintsRemaining: Math.max(0, hintLimit - session.hintsUsed),
@@ -163,11 +162,11 @@ export function toResultView(input: {
   };
 
   return {
-    sessionId: session._id.toString(),
-    caseId: caseDoc._id.toString(),
+    sessionId: session._id,
+    caseId: caseDoc._id,
     correct: session.isCorrect === true,
     selectedSuspect: {
-      id: selected._id.toString(),
+      id: selected._id,
       displayName: selected.displayName,
     },
     culprit: toSuspectView(culprit, suspects),
@@ -186,8 +185,8 @@ export function toResultView(input: {
 
 export function toGenerationStatusView(job: GenerationJobDocument): GenerationStatusView {
   return {
-    id: job._id.toString(),
-    caseId: job.caseId.toString(),
+    id: job._id,
+    caseId: job.caseId,
     status: job.status,
     stage: job.stage,
     provider: job.provider,

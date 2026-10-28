@@ -1,10 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Express, NextFunction, Request, Response } from "express";
-import mongoose from "mongoose";
 import { attachDatabasePool, waitUntil } from "@vercel/functions";
 import { loadConfig, type AppConfig } from "./config/env.js";
 import { createApp } from "./app.js";
 import { connectDatabase } from "./db/connect.js";
+import { getDatabase } from "./db/database.js";
 import type { GenerationService } from "./services/generation-service.js";
 import { createLogger, type Logger } from "./utils/logger.js";
 
@@ -36,13 +36,16 @@ async function createRuntime(): Promise<Runtime> {
     throw new DatabaseUnavailableError(config, logger, error);
   }
 
-  // Keep idle MongoDB connections from pinning a suspended Fluid Compute
+  // Keep idle Postgres connections from pinning a suspended Fluid Compute
   // instance. The helper is optional outside Vercel and safe to skip if the
-  // driver shape is not recognized.
+  // pool shape is not recognized.
   try {
-    attachDatabasePool(mongoose.connection.getClient());
+    const pool = getDatabase().rawPool;
+    if (pool) {
+      attachDatabasePool(pool);
+    }
   } catch (error) {
-    logger.warn({ err: error }, "could not attach the MongoDB pool to Vercel");
+    logger.warn({ err: error }, "could not attach the Postgres pool to Vercel");
   }
 
   return { app: createApp({ config, logger }), logger };

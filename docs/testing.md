@@ -2,7 +2,7 @@
 
 ## Commands
 
-Run everything from the repository root after `npm install`. Unit and integration suites need no running MongoDB instance or real `.env`; the backend suite starts an ephemeral MongoDB through `mongodb-memory-server` (version 8.0.4).
+Run everything from the repository root after `npm install`. Unit and integration suites need no running PostgreSQL instance or real `.env`; the backend suite starts an in-process PGlite database and exposes it through the PGlite TCP socket server. The same code path is used in production with `pg` against PostgreSQL.
 
 ```bash
 npm run typecheck
@@ -21,11 +21,13 @@ npm run test:e2e
 
 `npm run test:e2e` builds all three packages, then starts a self-contained Playwright stack:
 
-- an in-memory MongoDB 8.0.4, downloaded into `backend/.cache/mongodb-binaries/` on first use;
+- an in-process PGlite database over the PGlite TCP socket server, with `DATABASE_SSL=disable` and `maxConnections: 10`;
 - the built Express API on `127.0.0.1:4000`;
 - the built frontend through `vite preview` on `127.0.0.1:4173`, with `/api` proxied to the API.
 
-The stack is started by `e2e/stack.mjs` and configured in `playwright.config.ts`. It does not touch a developer database and does not require `.env`.
+The stack is started by `e2e/stack.mjs` and configured in `playwright.config.ts`. It does not touch a developer database and does not require `.env` or network access. PGlite's socket server defaults to one connection, so the stack explicitly raises the limit.
+
+PostgreSQL behavior is not identical to PGlite. The production path is exercised separately against the Supabase pooler before deployment; see [Latest observed results](#latest-observed-results).
 
 If the Playwright browser is missing:
 
@@ -35,7 +37,7 @@ npx playwright install chromium
 
 ## Test inventory
 
-### Backend — 8 files, 74 tests
+### Backend — 8 files, 75 tests
 
 | File | Tests | Coverage |
 | --- | ---: | --- |
@@ -45,10 +47,10 @@ npx playwright install chromium
 | `backend/src/tests/scoring.test.ts` | 5 | Base score, hint penalty, zero floor, incorrect accusation, invalid hint counts |
 | `backend/src/tests/rate-limit.test.ts` | 1 | Allow-up-to-limit then `429` behavior |
 | `backend/src/tests/openai-compatible-provider.test.ts` | 11 | OpenAI-compatible request shape, endpoint normalization, fenced JSON parsing, bounded retry/backoff, credential failure, timeout normalization, malformed/empty output, safe error messages |
-| `backend/src/tests/config.test.ts` | 8 | Mock/static defaults, provider-neutral configuration, required URL/model, URL scheme validation, unsupported modes, bounded limits, secret-safe errors, placeholder rejection |
+| `backend/src/tests/config.test.ts` | 9 | Mock/static defaults, provider-neutral configuration, required URL/model, URL scheme validation, unsupported modes, bounded limits, secret-safe errors, placeholder rejection, Postgres URL/SSL validation |
 | `backend/src/tests/generation.test.ts` | 5 | Category/difficulty matrix, evidence-preference coverage, mapping invariants, determinism, public-metadata/hint isolation, provider-neutral prompt construction |
 
-The integration suite exercises the real Express app, middleware, services, Mongoose models, and the in-process generation worker. It verifies security boundaries such as:
+The integration suite exercises the real Express app, middleware, services, Postgres repositories, PGlite schema, and the in-process generation worker. It verifies security boundaries such as:
 
 - Public case payloads contain no culprit, solution, canonical timeline, or hint text.
 - Another guest cannot read another guest's case, generation status, or session.
@@ -82,18 +84,19 @@ The axe checks use `@axe-core/playwright` with `wcag2a`, `wcag2aa`, `wcag21a`, `
 
 ## Latest observed results
 
-Verified on **2026-10-26** (Node 24, npm 11, WSL2):
+Verified on **2026-10-28** (Node 24, npm 11, WSL2):
 
 | Check | Result |
 | --- | --- |
 | `npm run typecheck` | Passed |
 | `npm run lint` | Passed — 0 errors, 0 warnings |
 | `npm run build` | Passed — shared/backend emitted; frontend bundle built |
-| Backend suite | **74/74 passed**, 8/8 files |
+| Backend suite | **75/75 passed**, 8/8 files |
 | Frontend suite | **24/24 passed**, 5/5 files |
 | Playwright E2E | **6/6 passed**, 2/2 files; axe reports zero WCAG A/AA violations on covered screens |
 | Dependency audit | `npm audit` reports **0 vulnerabilities** (production and full dependency trees) |
-| Production build smoke | Covered by the E2E stack: built API + built frontend + fresh in-memory MongoDB |
+| Production build smoke | Covered by the E2E stack: built API + built frontend + fresh PGlite database |
+| Supabase preflight | **Passed** against the production database through the pooler: schema initialization, sample play, hints, accusation/results, 404s, custom mock generation to `ready`, and cleanup |
 
 The production frontend build emits Rollup notices about `@__PURE__` comments inside Zod's published files. They are third-party annotation warnings, not build failures.
 
@@ -101,7 +104,7 @@ The production frontend build emits Rollup notices about `@__PURE__` comments in
 
 The automated E2E suite covers the main journeys. Before shipping, still verify in the target browsers:
 
-1. Start MongoDB and `npm run dev`; open `http://localhost:5173`.
+1. Start PostgreSQL, set `DATABASE_URL`/`DATABASE_SSL`, and run `npm run dev`; open `http://localhost:5173`.
 2. Launch the sample from the landing page. Confirm suspects, eight exhibits, timeline, and hint counter load.
 3. Open several exhibits and confirm progress persists after refresh (session cookie).
 4. Use all three hints; confirm the fourth is refused and the button disables.
@@ -116,7 +119,8 @@ The automated E2E suite covers the main journeys. Before shipping, still verify 
 
 - **No verified live-provider test** — the `openai-compatible` adapter is tested against a mocked HTTP server only. A real endpoint/model/credential must be selected and exercised separately.
 - **No live media tests** — static SVG and text fallback are the only implemented media paths.
+- **PGlite is not PostgreSQL** — it exercises the application's SQL and repository code, but not the Supabase pooler, TLS termination, concurrency, or version-specific planner behavior. The production path has a separate smoke preflight against Supabase.
 - **No durable queue or multi-instance tests** — startup recovery assumes one API process owns the database.
 - **No load/performance tests** — rate limiting is in-memory and single-process.
 - **No visual-regression tests** — styling is checked by build, axe, and browser E2E.
-- **No live deployment test** — the built stack runs locally, but no deployed environment, backup/restore drill, or real provider quota has been verified.
+- **No backup/restore drill or provider-quota validation** — the deployed app is checked over HTTP, but restore and quota behavior have not been exercised.

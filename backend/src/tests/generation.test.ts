@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Types } from "mongoose";
+import { newId } from "../utils/ids.js";
 import {
   CATEGORY_VALUES,
   DIFFICULTY_VALUES,
@@ -39,8 +39,8 @@ function documentsFor(request: GenerationRequest) {
   const docs = buildGeneratedCaseDocuments({
     blueprint,
     request,
-    caseId: new Types.ObjectId(),
-    generationId: new Types.ObjectId(),
+    caseId: newId(),
+    generationId: newId(),
     creatorSessionId: "test-guest-hash",
     provider: "mock",
     hintLimit: 3,
@@ -85,7 +85,7 @@ describe("mock case generation", () => {
         });
 
         const culprit = docs.suspectDocs.find((suspect) =>
-          suspect._id.equals(docs.solutionDoc.culpritSuspectId),
+          suspect._id === docs.solutionDoc.culpritSuspectId,
         );
         expect(culprit).toBeTruthy();
         expect(docs.caseDoc.suspectIds.map((id) => id.toString())).toContain(
@@ -129,7 +129,7 @@ describe("mock case generation", () => {
       requestFor("missing_person", "medium", EVIDENCE_PREFERENCE_VALUES.slice(0, 3)),
     );
     const culprit = docs.suspectDocs.find((suspect) =>
-      suspect._id.equals(docs.solutionDoc.culpritSuspectId),
+      suspect._id === docs.solutionDoc.culpritSuspectId,
     );
     if (!culprit) {
       throw new Error("missing culprit");

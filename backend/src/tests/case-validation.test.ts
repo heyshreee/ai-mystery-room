@@ -16,7 +16,7 @@ describe("deterministic case validation", () => {
   it("rejects a culprit who is not in the suspect list", () => {
     const input = sample();
     input.suspectDocs = input.suspectDocs.filter(
-      (suspect) => !suspect._id.equals(input.solutionDoc.culpritSuspectId),
+      (suspect) => suspect._id !== input.solutionDoc.culpritSuspectId,
     );
     const result = validateCaseStructure(input);
     expect(result.valid).toBe(false);
@@ -56,7 +56,7 @@ describe("deterministic case validation", () => {
   it("rejects evidence metadata that names the culprit", () => {
     const input = sample();
     const culprit = input.suspectDocs.find((suspect) =>
-      suspect._id.equals(input.solutionDoc.culpritSuspectId),
+      suspect._id === input.solutionDoc.culpritSuspectId,
     );
     const firstEvidence = input.evidenceDocs[0];
     if (!culprit || !firstEvidence) {
@@ -73,7 +73,7 @@ describe("deterministic case validation", () => {
   it("rejects a hint that names the culprit", () => {
     const input = sample();
     const culprit = input.suspectDocs.find((suspect) =>
-      suspect._id.equals(input.solutionDoc.culpritSuspectId),
+      suspect._id === input.solutionDoc.culpritSuspectId,
     );
     if (!culprit) {
       throw new Error("fixture missing culprit");

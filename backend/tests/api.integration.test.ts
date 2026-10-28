@@ -1,17 +1,31 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import mongoose from "mongoose";
 import request from "supertest";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { PGlite } from "@electric-sql/pglite";
+import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 import type { Express } from "express";
 import { createApp } from "../src/app.js";
 import { loadConfig } from "../src/config/env.js";
+import { connectDatabase, disconnectDatabase } from "../src/db/connect.js";
+import { newId } from "../src/utils/ids.js";
 import { createLogger } from "../src/utils/logger.js";
-import { CaseModel } from "../src/models/Case.js";
-import { EvidenceModel } from "../src/models/Evidence.js";
-import { GameSessionModel } from "../src/models/GameSession.js";
-import { GenerationJobModel } from "../src/models/GenerationJob.js";
-import { SolutionModel } from "../src/models/Solution.js";
-import { SuspectModel } from "../src/models/Suspect.js";
+import {
+  countCases,
+  deleteAllCases,
+  findCaseById,
+  insertCase,
+  updateCase,
+} from "../src/repositories/cases.js";
+import { countEvidenceByCaseId } from "../src/repositories/evidence.js";
+import {
+  findGenerationJobById,
+  insertGenerationJob,
+} from "../src/repositories/generation-jobs.js";
+import { findSolutionByCaseId } from "../src/repositories/solutions.js";
+import {
+  countSuspectsByCaseId,
+  insertSuspects,
+} from "../src/repositories/suspects.js";
+import { updateGameSessionExpiry } from "../src/repositories/game-sessions.js";
 import { SAMPLE_CASE_DEFINITION } from "../src/services/sample-case.js";
 import { recoverInterruptedGenerations } from "../src/services/generation-recovery.js";
 import { buildMockBlueprint } from "../src/generation/mock-blueprint.js";
@@ -23,7 +37,8 @@ import {
 
 type Agent = ReturnType<typeof request.agent>;
 
-let mongo: MongoMemoryServer;
+let pglite: PGlite;
+let socketServer: PGLiteSocketServer;
 let app: Express;
 
 const CULPRIT_NAME = "Jonah Reed";
@@ -41,7 +56,8 @@ function configFor(overrides: Record<string, string> = {}) {
   return loadConfig({
     ...process.env,
     NODE_ENV: "test",
-    MONGODB_URI: mongo.getUri("amr_test"),
+    DATABASE_URL: process.env.DATABASE_URL,
+    DATABASE_SSL: "disable",
     SESSION_SECRET: process.env.SESSION_SECRET,
     FRONTEND_ORIGIN: "http://localhost:5173,https://example.test",
     LOG_LEVEL: "silent",
@@ -158,38 +174,43 @@ function keysOf(value: unknown, found = new Set<string>()): Set<string> {
   return found;
 }
 
+function parseServerConn(value: string): { host: string; port: number } {
+  const separator = value.lastIndexOf(":");
+  if (separator < 0) {
+    throw new Error(`Unexpected PGlite socket address: ${value}`);
+  }
+  return {
+    host: value.slice(0, separator),
+    port: Number(value.slice(separator + 1)),
+  };
+}
+
 beforeAll(async () => {
-  mongo = await MongoMemoryServer.create({
-    binary: { version: "8.0.4" },
+  pglite = await PGlite.create();
+  socketServer = new PGLiteSocketServer({
+    db: pglite,
+    host: "127.0.0.1",
+    port: 0,
+    maxConnections: 10,
   });
-  await mongoose.connect(mongo.getUri("amr_test"));
-  await Promise.all([
-    CaseModel.init(),
-    SuspectModel.init(),
-    EvidenceModel.init(),
-    SolutionModel.init(),
-    GameSessionModel.init(),
-    GenerationJobModel.init(),
-  ]);
+  await socketServer.start();
+  const { host, port } = parseServerConn(socketServer.getServerConn());
+  process.env.DATABASE_URL = `postgresql://postgres:postgres@${host}:${port}/postgres`;
+  process.env.DATABASE_SSL = "disable";
+
+  await connectDatabase(configFor(), createLogger("silent"));
   app = makeApp();
 }, 180_000);
 
 afterEach(async () => {
   await waitForGeneration().catch(() => undefined);
-  await Promise.all([
-    CaseModel.deleteMany({}).exec(),
-    SuspectModel.deleteMany({}).exec(),
-    EvidenceModel.deleteMany({}).exec(),
-    SolutionModel.deleteMany({}).exec(),
-    GameSessionModel.deleteMany({}).exec(),
-    GenerationJobModel.deleteMany({}).exec(),
-  ]);
+  await deleteAllCases();
 });
 
 afterAll(async () => {
-  await mongoose.connection.dropDatabase();
-  await mongoose.disconnect();
-  await mongo.stop();
+  await disconnectDatabase();
+  await socketServer.stop();
+  await pglite.close();
 });
 
 describe("health and foundation middleware", () => {
@@ -311,7 +332,7 @@ describe("sample case creation and public DTO isolation", () => {
       .expect(200);
     expect(secondResponse.body.data.case.id).toBe(first.case.id);
     expect(secondResponse.body.data.generationId).toBe(first.generationId);
-    expect(await CaseModel.countDocuments({})).toBe(1);
+    expect(await countCases()).toBe(1);
   });
 
   it("keeps the sample case public but honors private case ownership", async () => {
@@ -319,10 +340,7 @@ describe("sample case creation and public DTO isolation", () => {
     const created = await createSample(owner);
     await owner.get(`/api/cases/${created.case.id}`).expect(200);
 
-    await CaseModel.updateOne(
-      { _id: created.case.id },
-      { $set: { isPublic: false } },
-    ).exec();
+    await updateCase(created.case.id, { isPublic: false });
 
     const stranger = request.agent(app);
     const response = await stranger.get(`/api/cases/${created.case.id}`).expect(404);
@@ -448,24 +466,24 @@ describe("custom generation pipeline", () => {
     });
     expect(imageDetail.body.data.sourceLabel).toContain("static fictional diagram");
 
-    const solution = await SolutionModel.findOne({ caseId: finished.caseId }).exec();
+    const solution = await findSolutionByCaseId(finished.caseId);
     expect(solution).toBeTruthy();
     expect(solution?.validationStatus).toBe("valid");
     if (!solution) {
       throw new Error("generated case is missing its solution");
     }
     expect(caseView.suspects.map((suspect: { id: string }) => suspect.id)).toContain(
-      solution.culpritSuspectId.toString(),
+      solution.culpritSuspectId,
     );
 
-    const job = await GenerationJobModel.findById(finished.id).exec();
+    const job = await findGenerationJobById(finished.id);
     expect(job?.attempts).toBeGreaterThanOrEqual(1);
     expect(job?.promptVersion).toBe("case-blueprint-v1");
 
     const session = await createSession(agent, finished.caseId);
     const result = await agent
       .post(`/api/sessions/${session.id}/accusations`)
-      .send({ suspectId: solution.culpritSuspectId.toString() })
+      .send({ suspectId: solution.culpritSuspectId })
       .expect(201);
     expect(result.body.data.correct).toBe(true);
     expect(result.body.data.solution.explanation).toContain("Supporting exhibits:");
@@ -487,7 +505,7 @@ describe("custom generation pipeline", () => {
       .expect(200);
     expect(replay.body.data.case.id).toBe(finished.caseId);
     expect(replay.body.data.generationId).toBe(finished.id);
-    expect(await CaseModel.countDocuments({ isSample: false })).toBe(1);
+    expect(await countCases({ isSample: false })).toBe(1);
   });
 
   it("shares one in-flight generation for duplicate submissions", async () => {
@@ -509,7 +527,7 @@ describe("custom generation pipeline", () => {
       .expect(202);
     expect(duplicate.body.data.id).toBe(first.body.data.id);
     expect(duplicate.body.data.caseId).toBe(first.body.data.caseId);
-    expect(await CaseModel.countDocuments({ isSample: false })).toBe(1);
+    expect(await countCases({ isSample: false })).toBe(1);
 
     provider.release();
     const finished = await readyGeneration(agent, first.body.data.id, gatedApp);
@@ -552,12 +570,12 @@ describe("custom generation pipeline", () => {
     const caseResponse = await agent.get(`/api/cases/${status.caseId}`).expect(409);
     expect(caseResponse.body.error.code).toBe("CASE_NOT_READY");
 
-    const job = await GenerationJobModel.findById(status.id).exec();
+    const job = await findGenerationJobById(status.id);
     expect(job?.attempts).toBe(2);
-    expect(await SuspectModel.countDocuments({ caseId: status.caseId })).toBe(0);
-    expect(await EvidenceModel.countDocuments({ caseId: status.caseId })).toBe(0);
-    expect(await SolutionModel.countDocuments({ caseId: status.caseId })).toBe(0);
-    const failedCase = await CaseModel.findById(status.caseId).exec();
+    expect(await countSuspectsByCaseId(status.caseId)).toBe(0);
+    expect(await countEvidenceByCaseId(status.caseId)).toBe(0);
+    expect(await findSolutionByCaseId(status.caseId)).toBeNull();
+    const failedCase = await findCaseById(status.caseId);
     expect(failedCase?.status).toBe("failed");
   });
 
@@ -601,9 +619,9 @@ describe("custom generation pipeline", () => {
       status: "failed",
       errorCode: "INVALID_AI_OUTPUT",
     });
-    expect(await SuspectModel.countDocuments({ caseId: status.caseId })).toBe(0);
-    expect(await EvidenceModel.countDocuments({ caseId: status.caseId })).toBe(0);
-    expect(await SolutionModel.countDocuments({ caseId: status.caseId })).toBe(0);
+    expect(await countSuspectsByCaseId(status.caseId)).toBe(0);
+    expect(await countEvidenceByCaseId(status.caseId)).toBe(0);
+    expect(await findSolutionByCaseId(status.caseId)).toBeNull();
   });
 
   it("bounds timeout retries and reports a safe category", async () => {
@@ -637,7 +655,7 @@ describe("custom generation pipeline", () => {
     });
     expect(status.message).toContain("timeout");
     expect(calls).toBe(2);
-    expect(await CaseModel.countDocuments({ isSample: false })).toBe(1);
+    expect(await countCases({ isSample: false })).toBe(1);
   });
 
   it("does not retry a provider that rejects its credentials", async () => {
@@ -699,7 +717,7 @@ describe("custom generation pipeline", () => {
     const status = await readyGeneration(agent, accepted.body.data.id, retryingApp);
     expect(status.status).toBe("ready");
     expect(calls).toBe(2);
-    const job = await GenerationJobModel.findById(status.id).exec();
+    const job = await findGenerationJobById(status.id);
     expect(job?.attempts).toBe(2);
   });
 
@@ -720,10 +738,10 @@ describe("custom generation pipeline", () => {
   });
 
   it("marks an interrupted generation as failed on the next startup", async () => {
-    const caseId = new mongoose.Types.ObjectId();
-    const generationId = new mongoose.Types.ObjectId();
+    const caseId = newId();
+    const generationId = newId();
 
-    await CaseModel.create({
+    await insertCase({
       _id: caseId,
       title: "Interrupted case",
       scenario: CUSTOM_SCENARIO,
@@ -748,7 +766,7 @@ describe("custom generation pipeline", () => {
       fictionNotice: "This case is fictional.",
       timeline: [],
     });
-    await GenerationJobModel.create({
+    await insertGenerationJob({
       _id: generationId,
       caseId,
       creatorSessionId: "interrupted-guest-hash",
@@ -759,32 +777,35 @@ describe("custom generation pipeline", () => {
       promptVersion: "case-blueprint-v1",
       message: "Drafting the case blueprint.",
     });
-    await SuspectModel.create({
-      caseId,
-      displayName: "Interrupted Suspect",
-      role: "Role",
-      profile: "Partial profile",
-      motiveSummary: "Partial motive",
-      opportunitySummary: "Partial opportunity",
-      publicStatement: "Partial statement",
-      relationships: [],
-    });
+    await insertSuspects([
+      {
+        _id: newId(),
+        caseId,
+        displayName: "Interrupted Suspect",
+        role: "Role",
+        profile: "Partial profile",
+        motiveSummary: "Partial motive",
+        opportunitySummary: "Partial opportunity",
+        publicStatement: "Partial statement",
+        relationships: [],
+      },
+    ]);
 
     const result = await recoverInterruptedGenerations(createLogger("silent"));
     expect(result).toEqual({ cases: 1, jobs: 1 });
 
-    const failedCase = await CaseModel.findById(caseId).exec();
+    const failedCase = await findCaseById(caseId);
     expect(failedCase?.status).toBe("failed");
-    const failedJob = await GenerationJobModel.findById(generationId).exec();
+    const failedJob = await findGenerationJobById(generationId);
     expect(failedJob).toMatchObject({
       status: "failed",
       stage: "failed",
       errorCode: "GENERATION_FAILED",
     });
     expect(failedJob?.message).toContain("restarted");
-    expect(await SuspectModel.countDocuments({ caseId })).toBe(0);
-    expect(await EvidenceModel.countDocuments({ caseId })).toBe(0);
-    expect(await SolutionModel.countDocuments({ caseId })).toBe(0);
+    expect(await countSuspectsByCaseId(caseId)).toBe(0);
+    expect(await countEvidenceByCaseId(caseId)).toBe(0);
+    expect(await findSolutionByCaseId(caseId)).toBeNull();
 
     await expect(recoverInterruptedGenerations(createLogger("silent"))).resolves.toEqual({
       cases: 0,
@@ -1006,10 +1027,7 @@ describe("investigation, hints, accusation, and reveal", () => {
       .send({ viewedEvidenceId: firstEvidenceB.id })
       .expect(404);
 
-    await CaseModel.updateOne(
-      { _id: caseB.case.id },
-      { $set: { isPublic: false } },
-    ).exec();
+    await updateCase(caseB.case.id, { isPublic: false });
     const evidenceAfterPrivate = await agentA
       .get(`/api/evidence/${firstEvidenceB.id}`)
       .expect(404);
@@ -1021,10 +1039,7 @@ describe("investigation, hints, accusation, and reveal", () => {
     const created = await createSample(agent);
     const session = await createSession(agent, created.case.id);
 
-    await GameSessionModel.updateOne(
-      { _id: session.id },
-      { $set: { expiresAt: new Date(Date.now() - 1_000) } },
-    ).exec();
+    await updateGameSessionExpiry(session.id, new Date(Date.now() - 1_000));
 
     const evidence = await listEvidence(agent, created.case.id);
     const evidenceId = evidence[0]?.id;

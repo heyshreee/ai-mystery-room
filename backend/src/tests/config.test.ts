@@ -3,7 +3,8 @@ import { loadConfig, type RawEnvironment } from "../config/env.js";
 
 const BASE_ENV: RawEnvironment = {
   NODE_ENV: "test",
-  MONGODB_URI: "mongodb://127.0.0.1:27017/amr_config_test",
+  DATABASE_URL: "postgresql://amr_app:secret@127.0.0.1:5432/postgres",
+  DATABASE_SSL: "disable",
   SESSION_SECRET: "a_test_session_secret_longer_than_thirty_two_characters",
   LOG_LEVEL: "silent",
 };

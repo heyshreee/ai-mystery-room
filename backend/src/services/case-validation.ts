@@ -70,9 +70,9 @@ export function validateCaseStructure(input: CaseValidationInput): CaseValidatio
     });
   }
 
-  const suspectIds = new Set(suspectDocs.map((suspect) => suspect._id.toString()));
+  const suspectIds = new Set(suspectDocs.map((suspect) => suspect._id));
   const suspectById = new Map(
-    suspectDocs.map((suspect) => [suspect._id.toString(), suspect] as const),
+    suspectDocs.map((suspect) => [suspect._id, suspect] as const),
   );
   if (suspectIds.size !== suspectDocs.length) {
     issues.push({ code: "DUPLICATE_SUSPECT_ID", message: "Suspect IDs must be unique." });
@@ -90,13 +90,13 @@ export function validateCaseStructure(input: CaseValidationInput): CaseValidatio
     displayNames.add(normalizedName);
 
     for (const relationship of suspect.relationships) {
-      if (relationship.otherSuspectId.equals(suspect._id)) {
+      if (relationship.otherSuspectId === suspect._id) {
         issues.push({
           code: "SELF_RELATIONSHIP",
           message: `${suspect.displayName} cannot have a relationship with themself.`,
         });
       }
-      if (!suspectIds.has(relationship.otherSuspectId.toString())) {
+      if (!suspectIds.has(relationship.otherSuspectId)) {
         issues.push({
           code: "INVALID_RELATIONSHIP",
           message: `${suspect.displayName} references an unknown suspect in a relationship.`,
@@ -118,14 +118,14 @@ export function validateCaseStructure(input: CaseValidationInput): CaseValidatio
     }
   }
 
-  const culprit = suspectById.get(solutionDoc.culpritSuspectId.toString());
+  const culprit = suspectById.get(solutionDoc.culpritSuspectId);
   if (!culprit) {
     issues.push({
       code: "CULPRIT_NOT_IN_CASE",
       message: "The canonical culprit must be one of the case suspects.",
     });
   }
-  if (!caseDoc.suspectIds.every((id) => suspectIds.has(id.toString()))) {
+  if (!caseDoc.suspectIds.every((id) => suspectIds.has(id))) {
     issues.push({
       code: "CASE_SUSPECT_MISMATCH",
       message: "The case references a suspect that is not part of the case.",
@@ -207,7 +207,7 @@ export function validateCaseStructure(input: CaseValidationInput): CaseValidatio
       previousCanonicalTime = time;
     }
     for (const suspectId of event.involvedSuspectIds) {
-      if (!suspectIds.has(suspectId.toString())) {
+      if (!suspectIds.has(suspectId)) {
         issues.push({
           code: "INVALID_CANONICAL_SUSPECT",
           message: `Canonical event "${event.eventId}" references an unknown suspect.`,
@@ -220,7 +220,7 @@ export function validateCaseStructure(input: CaseValidationInput): CaseValidatio
   const positionsBySuspectAndTime = new Map<string, Set<string>>();
   for (const event of solutionDoc.canonicalTimeline) {
     for (const suspectId of event.involvedSuspectIds) {
-      const key = `${suspectId.toString()}|${event.at}`;
+      const key = `${suspectId}|${event.at}`;
       const locations = positionsBySuspectAndTime.get(key) ?? new Set<string>();
       locations.add(event.location);
       positionsBySuspectAndTime.set(key, locations);
@@ -240,15 +240,15 @@ export function validateCaseStructure(input: CaseValidationInput): CaseValidatio
     issues.push({ code: "EMPTY_EVIDENCE", message: "A case must include evidence." });
   }
 
-  const evidenceIds = new Set(evidenceDocs.map((evidence) => evidence._id.toString()));
+  const evidenceIds = new Set(evidenceDocs.map((evidence) => evidence._id));
   if (evidenceIds.size !== evidenceDocs.length) {
     issues.push({ code: "DUPLICATE_EVIDENCE_ID", message: "Evidence IDs must be unique." });
   }
   const evidenceById = new Map(
-    evidenceDocs.map((evidence) => [evidence._id.toString(), evidence] as const),
+    evidenceDocs.map((evidence) => [evidence._id, evidence] as const),
   );
   const exhibitNumbers = new Set<number>();
-  const evidenceCaseId = evidenceDocs[0]?.caseId.toString();
+  const evidenceCaseId = evidenceDocs[0]?.caseId;
 
   for (const evidence of evidenceDocs) {
     if (exhibitNumbers.has(evidence.exhibitNumber)) {
@@ -259,7 +259,7 @@ export function validateCaseStructure(input: CaseValidationInput): CaseValidatio
     }
     exhibitNumbers.add(evidence.exhibitNumber);
 
-    if (evidenceCaseId && evidence.caseId.toString() !== evidenceCaseId) {
+    if (evidenceCaseId && evidence.caseId !== evidenceCaseId) {
       issues.push({
         code: "EVIDENCE_CASE_MISMATCH",
         message: `Evidence "${evidence.title}" belongs to a different case.`,
@@ -267,7 +267,7 @@ export function validateCaseStructure(input: CaseValidationInput): CaseValidatio
     }
 
     for (const suspectId of evidence.relatedSuspectIds) {
-      if (!suspectIds.has(suspectId.toString())) {
+      if (!suspectIds.has(suspectId)) {
         issues.push({
           code: "INVALID_EVIDENCE_SUSPECT",
           message: `Evidence "${evidence.title}" references an unknown suspect.`,
@@ -320,7 +320,7 @@ export function validateCaseStructure(input: CaseValidationInput): CaseValidatio
     }
   }
 
-  const supportingIds = solutionDoc.supportingEvidenceIds.map((id) => id.toString());
+  const supportingIds = [...solutionDoc.supportingEvidenceIds];
   if (supportingIds.length < MIN_SUPPORTING_EVIDENCE) {
     issues.push({
       code: "INSUFFICIENT_SUPPORTING_EVIDENCE",
@@ -339,7 +339,7 @@ export function validateCaseStructure(input: CaseValidationInput): CaseValidatio
       continue;
     }
     supportingTypes.add(evidence.type);
-    if (culprit && evidence.relatedSuspectIds.some((id) => id.equals(culprit._id))) {
+    if (culprit && evidence.relatedSuspectIds.some((id) => id === culprit._id)) {
       culpritLinkedSupporting += 1;
     }
   }

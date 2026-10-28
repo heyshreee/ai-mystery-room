@@ -1,9 +1,9 @@
-import type { Types } from "mongoose";
-import { CaseModel } from "../models/Case.js";
-import { EvidenceModel } from "../models/Evidence.js";
-import { GenerationJobModel } from "../models/GenerationJob.js";
-import { SolutionModel } from "../models/Solution.js";
-import { SuspectModel } from "../models/Suspect.js";
+import { getDatabase } from "../db/database.js";
+import { markCasesFailed, findUnfinishedCaseIds } from "../repositories/cases.js";
+import { deleteEvidenceByCaseIds } from "../repositories/evidence.js";
+import { markJobsFailedByCaseIds } from "../repositories/generation-jobs.js";
+import { deleteSolutionsByCaseIds } from "../repositories/solutions.js";
+import { deleteSuspectsByCaseIds } from "../repositories/suspects.js";
 import type { Logger } from "../utils/logger.js";
 
 export const INTERRUPTED_GENERATION_MESSAGE =
@@ -25,50 +25,27 @@ export interface RecoveryResult {
 export async function recoverInterruptedGenerations(
   logger: Logger,
 ): Promise<RecoveryResult> {
-  const unfinishedCases = await CaseModel.find({
-    status: { $in: ["generating", "validating"] },
-  })
-    .select({ _id: 1 })
-    .lean()
-    .exec();
-
-  const caseIds = unfinishedCases.map((entry) => entry._id as Types.ObjectId);
+  const caseIds = await findUnfinishedCaseIds();
   if (caseIds.length === 0) {
     return { cases: 0, jobs: 0 };
   }
 
-  await Promise.all([
-    SuspectModel.deleteMany({ caseId: { $in: caseIds } }).exec(),
-    EvidenceModel.deleteMany({ caseId: { $in: caseIds } }).exec(),
-    SolutionModel.deleteMany({ caseId: { $in: caseIds } }).exec(),
-  ]);
+  const result = await getDatabase().transaction(async (database) => {
+    await deleteSuspectsByCaseIds(caseIds, database);
+    await deleteEvidenceByCaseIds(caseIds, database);
+    await deleteSolutionsByCaseIds(caseIds, database);
 
-  const [caseUpdate, jobUpdate] = await Promise.all([
-    CaseModel.updateMany(
-      { _id: { $in: caseIds }, status: { $in: ["generating", "validating"] } },
-      { $set: { status: "failed" } },
-    ).exec(),
-    GenerationJobModel.updateMany(
-      {
-        caseId: { $in: caseIds },
-        status: { $in: ["pending", "validating"] },
-      },
-      {
-        $set: {
-          status: "failed",
-          stage: "failed",
-          errorCode: "GENERATION_FAILED",
-          message: INTERRUPTED_GENERATION_MESSAGE,
-          completedAt: new Date(),
-        },
-      },
-    ).exec(),
-  ]);
+    const cases = await markCasesFailed(caseIds, ["generating", "validating"], database);
+    const jobs = await markJobsFailedByCaseIds(
+      caseIds,
+      "GENERATION_FAILED",
+      INTERRUPTED_GENERATION_MESSAGE,
+      database,
+    );
 
-  const result = {
-    cases: caseUpdate.modifiedCount,
-    jobs: jobUpdate.modifiedCount,
-  };
+    return { cases, jobs };
+  });
+
   logger.warn(result, "marked interrupted generations as failed after restart");
   return result;
 }

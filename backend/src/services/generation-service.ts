@@ -1,11 +1,20 @@
-import { Types } from "mongoose";
 import type { AppConfig } from "../config/env.js";
 import type { Logger } from "../utils/logger.js";
-import { CaseModel } from "../models/Case.js";
-import { EvidenceModel } from "../models/Evidence.js";
-import { GenerationJobModel } from "../models/GenerationJob.js";
-import { SolutionModel } from "../models/Solution.js";
-import { SuspectModel } from "../models/Suspect.js";
+import { getDatabase } from "../db/database.js";
+import { updateCase, updateCaseIfStatus } from "../repositories/cases.js";
+import {
+  deleteEvidenceByCaseIds,
+  insertEvidence,
+} from "../repositories/evidence.js";
+import { updateGenerationJob } from "../repositories/generation-jobs.js";
+import {
+  deleteSolutionsByCaseIds,
+  insertSolution,
+} from "../repositories/solutions.js";
+import {
+  deleteSuspectsByCaseIds,
+  insertSuspects,
+} from "../repositories/suspects.js";
 import {
   caseBlueprintSchema,
   type CaseBlueprint,
@@ -24,8 +33,8 @@ import {
 import { validateCaseStructure } from "./case-validation.js";
 
 export interface GenerationInput {
-  caseId: Types.ObjectId;
-  generationId: Types.ObjectId;
+  caseId: string;
+  generationId: string;
   creatorSessionId: string;
   request: GenerationRequest;
 }
@@ -64,8 +73,8 @@ export class GenerationService {
       this.logger.error(
         {
           err: error,
-          caseId: input.caseId.toString(),
-          generationId: input.generationId.toString(),
+          caseId: input.caseId,
+          generationId: input.generationId,
         },
         "generation worker failed unexpectedly",
       );
@@ -126,8 +135,8 @@ export class GenerationService {
           lastFailure = failure;
           this.logger.warn(
             {
-              caseId: caseId.toString(),
-              generationId: generationId.toString(),
+              caseId: caseId,
+              generationId: generationId,
               provider: this.aiProvider.id,
               attempt,
               errorCode: failure.code,
@@ -153,8 +162,8 @@ export class GenerationService {
           );
           this.logger.warn(
             {
-              caseId: caseId.toString(),
-              generationId: generationId.toString(),
+              caseId: caseId,
+              generationId: generationId,
               provider: this.aiProvider.id,
               attempt,
               issueCount: issues.length,
@@ -179,8 +188,8 @@ export class GenerationService {
         if (alignmentIssues.length > 0) {
           this.logger.warn(
             {
-              caseId: caseId.toString(),
-              generationId: generationId.toString(),
+              caseId: caseId,
+              generationId: generationId,
               provider: this.aiProvider.id,
               attempt,
               issues: alignmentIssues.map(sanitizeValidationIssue),
@@ -225,8 +234,8 @@ export class GenerationService {
           );
           this.logger.warn(
             {
-              caseId: caseId.toString(),
-              generationId: generationId.toString(),
+              caseId: caseId,
+              generationId: generationId,
               provider: this.aiProvider.id,
               attempt,
               issues: issues.slice(0, 16).map(sanitizeValidationIssue),
@@ -260,8 +269,8 @@ export class GenerationService {
           this.logger.error(
             {
               err: error,
-              caseId: caseId.toString(),
-              generationId: generationId.toString(),
+              caseId: caseId,
+              generationId: generationId,
               provider: this.aiProvider.id,
               durationMs: Date.now() - startedAt,
             },
@@ -280,22 +289,17 @@ export class GenerationService {
           return;
         }
 
-        await GenerationJobModel.updateOne(
-          { _id: generationId },
-          {
-            $set: {
-              status: "ready",
-              stage: "published",
-              message: "The case file is ready.",
-              completedAt: new Date(),
-            },
-          },
-        ).exec();
+        await updateGenerationJob(generationId, {
+          status: "ready",
+          stage: "published",
+          message: "The case file is ready.",
+          completedAt: new Date(),
+        });
 
         this.logger.info(
           {
-            caseId: caseId.toString(),
-            generationId: generationId.toString(),
+            caseId: caseId,
+            generationId: generationId,
             provider: this.aiProvider.id,
             attempts: attempt,
             durationMs: Date.now() - startedAt,
@@ -319,8 +323,8 @@ export class GenerationService {
       this.logger.error(
         {
           err: error,
-          caseId: caseId.toString(),
-          generationId: generationId.toString(),
+          caseId: caseId,
+          generationId: generationId,
           provider: this.aiProvider.id,
           stage,
           durationMs: Date.now() - startedAt,
@@ -343,24 +347,43 @@ export class GenerationService {
     documents: ReturnType<typeof buildGeneratedCaseDocuments>,
   ): Promise<void> {
     const { caseDoc, suspectDocs, evidenceDocs, solutionDoc } = documents;
-    const { _id: caseId, ...caseFields } = caseDoc;
+    const { _id: caseId } = caseDoc;
 
-    await SuspectModel.insertMany(suspectDocs);
-    await EvidenceModel.insertMany(evidenceDocs);
-    await SolutionModel.create({ ...solutionDoc, validationStatus: "valid" });
+    await getDatabase().transaction(async (database) => {
+      const patch: Parameters<typeof updateCase>[1] = {
+        title: caseDoc.title,
+        scenario: caseDoc.scenario,
+        summary: caseDoc.summary,
+        category: caseDoc.category,
+        difficulty: caseDoc.difficulty,
+        status: "validating",
+        suspectIds: [...caseDoc.suspectIds],
+        evidenceIds: [...caseDoc.evidenceIds],
+        generationVersion: caseDoc.generationVersion,
+        isPublic: caseDoc.isPublic,
+        incident: caseDoc.incident,
+        timezone: caseDoc.timezone,
+        caseRules: [...caseDoc.caseRules],
+        fictionNotice: caseDoc.fictionNotice,
+        timeline: [...caseDoc.timeline],
+      };
 
-    const updated = await CaseModel.updateOne(
-      { _id: caseId, status: { $in: ["generating", "validating"] } },
-      { $set: { ...caseFields, status: "validating" } },
-    ).exec();
-    if (updated.matchedCount === 0) {
-      throw new Error("The case could not be updated during publication.");
-    }
+      const updated = await updateCaseIfStatus(
+        caseId,
+        ["generating", "validating"],
+        patch,
+        database,
+      );
+      if (updated === 0) {
+        throw new Error("The case could not be updated during publication.");
+      }
 
-    await CaseModel.updateOne(
-      { _id: caseId, status: "validating" },
-      { $set: { status: "ready" } },
-    ).exec();
+      await insertSuspects(suspectDocs, database);
+      await insertEvidence(evidenceDocs, database);
+      await insertSolution({ ...solutionDoc, validationStatus: "valid" }, database);
+
+      await updateCase(caseId, { status: "ready" }, database);
+    });
   }
 
   private async fail(
@@ -370,27 +393,19 @@ export class GenerationService {
   ): Promise<void> {
     await this.cleanup(input.caseId);
     await Promise.allSettled([
-      CaseModel.updateOne(
-        { _id: input.caseId },
-        { $set: { status: "failed" } },
-      ).exec(),
-      GenerationJobModel.updateOne(
-        { _id: input.generationId },
-        {
-          $set: {
-            status: "failed",
-            stage: "failed",
-            errorCode: failure.code,
-            message: failure.message,
-            completedAt: new Date(),
-          },
-        },
-      ).exec(),
+      updateCase(input.caseId, { status: "failed" }),
+      updateGenerationJob(input.generationId, {
+        status: "failed",
+        stage: "failed",
+        errorCode: failure.code,
+        message: failure.message,
+        completedAt: new Date(),
+      }),
     ]);
     this.logger.info(
       {
-        caseId: input.caseId.toString(),
-        generationId: input.generationId.toString(),
+        caseId: input.caseId,
+        generationId: input.generationId,
         provider: this.aiProvider.id,
         stage,
         errorCode: failure.code,
@@ -399,16 +414,16 @@ export class GenerationService {
     );
   }
 
-  private async cleanup(caseId: Types.ObjectId): Promise<void> {
+  private async cleanup(caseId: string): Promise<void> {
     await Promise.allSettled([
-      SuspectModel.deleteMany({ caseId }).exec(),
-      EvidenceModel.deleteMany({ caseId }).exec(),
-      SolutionModel.deleteMany({ caseId }).exec(),
+      deleteSuspectsByCaseIds([caseId]),
+      deleteEvidenceByCaseIds([caseId]),
+      deleteSolutionsByCaseIds([caseId]),
     ]);
   }
 
   private async updateJob(
-    generationId: Types.ObjectId,
+    generationId: string,
     update: {
       status: "pending" | "validating";
       stage: string;
@@ -416,17 +431,12 @@ export class GenerationService {
       message: string;
     },
   ): Promise<void> {
-    await GenerationJobModel.updateOne(
-      { _id: generationId },
-      {
-        $set: {
-          status: update.status,
-          stage: update.stage,
-          message: update.message,
-          ...(update.attempts ? { attempts: update.attempts } : {}),
-        },
-      },
-    ).exec();
+    await updateGenerationJob(generationId, {
+      status: update.status,
+      stage: update.stage,
+      message: update.message,
+      ...(update.attempts ? { attempts: update.attempts } : {}),
+    });
   }
 }
 

@@ -15,7 +15,14 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().min(1).max(65_535).default(4000),
   FRONTEND_ORIGIN: z.string().min(1).default("http://localhost:5173"),
-  MONGODB_URI: z.string().min(1, "MONGODB_URI is required."),
+  DATABASE_URL: z
+    .string()
+    .min(1, "DATABASE_URL is required.")
+    .refine(
+      (value) => /^postgres(ql)?:\/\//i.test(value),
+      "DATABASE_URL must be a postgres:// or postgresql:// connection string.",
+    ),
+  DATABASE_SSL: z.enum(["disable", "require", "no-verify"]).default("require"),
   SESSION_SECRET: z
     .string()
     .min(32, "SESSION_SECRET must be at least 32 characters.")
@@ -91,7 +98,8 @@ export interface AppConfig {
   isProduction: boolean;
   port: number;
   frontendOrigins: string[];
-  mongoUri: string;
+  databaseUrl: string;
+  databaseSsl: "disable" | "require" | "no-verify";
   sessionSecret: string;
   sessionTtlMs: number;
   guestCookieTtlMs: number;
@@ -140,7 +148,8 @@ export function loadConfig(environment: RawEnvironment = process.env): AppConfig
     isProduction: env.NODE_ENV === "production",
     port: env.PORT,
     frontendOrigins,
-    mongoUri: env.MONGODB_URI,
+    databaseUrl: env.DATABASE_URL,
+    databaseSsl: env.DATABASE_SSL,
     sessionSecret: env.SESSION_SECRET,
     sessionTtlMs: env.SESSION_TTL_HOURS * 60 * 60 * 1000,
     guestCookieTtlMs: env.GUEST_COOKIE_TTL_DAYS * 24 * 60 * 60 * 1000,

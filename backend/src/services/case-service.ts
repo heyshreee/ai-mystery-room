@@ -1,4 +1,3 @@
-import { Types, type HydratedDocument } from "mongoose";
 import {
   FICTION_NOTICE,
   type CaseCreatedView,
@@ -11,11 +10,33 @@ import {
 import type { AppConfig } from "../config/env.js";
 import { AppError } from "../utils/errors.js";
 import type { Logger } from "../utils/logger.js";
-import { CaseModel, type CaseDocument } from "../models/Case.js";
-import { EvidenceModel } from "../models/Evidence.js";
-import { GenerationJobModel } from "../models/GenerationJob.js";
-import { SolutionModel } from "../models/Solution.js";
-import { SuspectModel } from "../models/Suspect.js";
+import type { CaseDocument } from "../models/Case.js";
+import type { SolutionDocument } from "../models/Solution.js";
+import { getDatabase } from "../db/database.js";
+import { newId } from "../utils/ids.js";
+import {
+  findCaseByCreatorAndIdempotency,
+  findCaseById,
+  insertCase,
+  isDuplicateKeyError,
+  updateCase,
+} from "../repositories/cases.js";
+import {
+  countEvidenceByCaseId,
+  findEvidenceByCaseId,
+  findEvidenceById,
+  insertEvidence,
+} from "../repositories/evidence.js";
+import {
+  findGenerationJobById,
+  insertGenerationJob,
+  updateGenerationJob,
+} from "../repositories/generation-jobs.js";
+import { findSolutionByCaseId, insertSolution } from "../repositories/solutions.js";
+import {
+  findSuspectsByCaseId,
+  insertSuspects,
+} from "../repositories/suspects.js";
 import { PROMPT_VERSION } from "../generation/prompt.js";
 import { validateCaseStructure } from "./case-validation.js";
 import {
@@ -62,12 +83,9 @@ export class CaseService {
     idempotencyKey?: string,
   ): Promise<CreatedSampleCase> {
     if (idempotencyKey) {
-      const existing = await CaseModel.findOne({
-        creatorSessionId: guestHash,
-        idempotencyKey,
-      }).exec();
+      const existing = await findCaseByCreatorAndIdempotency(guestHash, idempotencyKey);
       if (existing) {
-        await this.getAccessibleCase(existing._id.toString(), guestHash);
+        await this.getAccessibleCase(existing._id, guestHash);
         return {
           data: await this.toCreatedView(existing),
           created: false,
@@ -97,15 +115,12 @@ export class CaseService {
     }
 
     try {
-      await this.persistSampleCase(instantiated, idempotencyKey ? guestHash : undefined);
+      await this.persistSampleCase(instantiated);
     } catch (error) {
       if (idempotencyKey && isDuplicateKeyError(error)) {
-        const existing = await CaseModel.findOne({
-          creatorSessionId: guestHash,
-          idempotencyKey,
-        }).exec();
+        const existing = await findCaseByCreatorAndIdempotency(guestHash, idempotencyKey);
         if (existing) {
-          await this.getAccessibleCase(existing._id.toString(), guestHash);
+          await this.getAccessibleCase(existing._id, guestHash);
           return {
             data: await this.toCreatedView(existing),
             created: false,
@@ -125,7 +140,7 @@ export class CaseService {
       );
     }
 
-    const persisted = await CaseModel.findById(instantiated.caseDoc._id).exec();
+    const persisted = await findCaseById(instantiated.caseDoc._id);
     if (!persisted) {
       throw new AppError(
         500,
@@ -136,8 +151,8 @@ export class CaseService {
 
     this.logger.info(
       {
-        caseId: persisted._id.toString(),
-        generationId: persisted.generationId.toString(),
+        caseId: persisted._id,
+        generationId: persisted.generationId,
         durationMs: Date.now() - startedAt,
         provider: "mock",
       },
@@ -156,76 +171,73 @@ export class CaseService {
     idempotencyKey?: string,
   ): Promise<CreatedCustomCase> {
     if (idempotencyKey) {
-      const existing = await CaseModel.findOne({
-        creatorSessionId: guestHash,
-        idempotencyKey,
-      }).exec();
+      const existing = await findCaseByCreatorAndIdempotency(guestHash, idempotencyKey);
       if (existing) {
         return this.resolveExistingCustomCase(existing);
       }
     }
 
-    const caseId = new Types.ObjectId();
-    const generationId = new Types.ObjectId();
+    const caseId = newId();
+    const generationId = newId();
     const provider = this.config.aiProvider;
 
     try {
-      await CaseModel.create({
-        _id: caseId,
-        title: "Preparing case file",
-        scenario: request.scenario,
-        summary: "The submitted brief is being prepared into a complete case file.",
-        category: request.category,
-        difficulty: request.difficulty,
-        status: "generating",
-        creatorSessionId: guestHash,
-        suspectIds: [],
-        evidenceIds: [],
-        generationVersion: `${provider}:${PROMPT_VERSION}`,
-        generationId,
-        ...(idempotencyKey ? { idempotencyKey } : {}),
-        isSample: false,
-        isPublic: false,
-        incident: {
-          location: "Pending generation",
-          occurredAt: new Date().toISOString(),
-          description: "The case brief is being prepared.",
-        },
-        timezone: "UTC",
-        caseRules: [],
-        fictionNotice: FICTION_NOTICE,
-        timeline: [],
-      });
+      await getDatabase().transaction(async (database) => {
+        await insertCase(
+          {
+            _id: caseId,
+            title: "Preparing case file",
+            scenario: request.scenario,
+            summary: "The submitted brief is being prepared into a complete case file.",
+            category: request.category,
+            difficulty: request.difficulty,
+            status: "generating",
+            creatorSessionId: guestHash,
+            suspectIds: [],
+            evidenceIds: [],
+            generationVersion: `${provider}:${PROMPT_VERSION}`,
+            generationId,
+            ...(idempotencyKey ? { idempotencyKey } : {}),
+            isSample: false,
+            isPublic: false,
+            incident: {
+              location: "Pending generation",
+              occurredAt: new Date().toISOString(),
+              description: "The case brief is being prepared.",
+            },
+            timezone: "UTC",
+            caseRules: [],
+            fictionNotice: FICTION_NOTICE,
+            timeline: [],
+          },
+          database,
+        );
 
-      await GenerationJobModel.create({
-        _id: generationId,
-        caseId,
-        creatorSessionId: guestHash,
-        status: "pending",
-        stage: "queued",
-        attempts: 0,
-        provider,
-        promptVersion: PROMPT_VERSION,
-        message: "Brief accepted. Waiting for the generator.",
+        await insertGenerationJob(
+          {
+            _id: generationId,
+            caseId,
+            creatorSessionId: guestHash,
+            status: "pending",
+            stage: "queued",
+            attempts: 0,
+            provider,
+            promptVersion: PROMPT_VERSION,
+            message: "Brief accepted. Waiting for the generator.",
+          },
+          database,
+        );
       });
     } catch (error) {
-      await Promise.allSettled([
-        CaseModel.deleteOne({ _id: caseId }).exec(),
-        GenerationJobModel.deleteOne({ _id: generationId }).exec(),
-      ]);
-
       if (idempotencyKey && isDuplicateKeyError(error)) {
-        const existing = await CaseModel.findOne({
-          creatorSessionId: guestHash,
-          idempotencyKey,
-        }).exec();
+        const existing = await findCaseByCreatorAndIdempotency(guestHash, idempotencyKey);
         if (existing) {
           return this.resolveExistingCustomCase(existing);
         }
       }
 
       this.logger.error(
-        { err: error, caseId: caseId.toString() },
+        { err: error, caseId },
         "custom case record could not be created",
       );
       throw new AppError(
@@ -243,7 +255,7 @@ export class CaseService {
       request,
     });
 
-    const job = await GenerationJobModel.findById(generationId).exec();
+    const job = await findGenerationJobById(generationId);
     if (!job) {
       throw new AppError(
         500,
@@ -254,8 +266,8 @@ export class CaseService {
 
     this.logger.info(
       {
-        caseId: caseId.toString(),
-        generationId: generationId.toString(),
+        caseId,
+        generationId,
         provider,
       },
       "custom generation accepted",
@@ -265,9 +277,9 @@ export class CaseService {
   }
 
   private async resolveExistingCustomCase(
-    caseDoc: HydratedDocument<CaseDocument>,
+    caseDoc: CaseDocument,
   ): Promise<CreatedCustomCase> {
-    const job = await GenerationJobModel.findById(caseDoc.generationId).exec();
+    const job = await findGenerationJobById(caseDoc.generationId);
     if (!job) {
       throw new AppError(
         500,
@@ -297,29 +309,24 @@ export class CaseService {
   async getPublicCase(caseId: string, guestHash: string): Promise<PublicCase> {
     const caseDoc = await this.getAccessibleCase(caseId, guestHash);
     const [suspectDocs, evidenceCount] = await Promise.all([
-      SuspectModel.find({ caseId: caseDoc._id }).exec(),
-      EvidenceModel.countDocuments({ caseId: caseDoc._id }).exec(),
+      findSuspectsByCaseId(caseDoc._id),
+      countEvidenceByCaseId(caseDoc._id),
     ]);
     return toPublicCase(caseDoc, suspectDocs, evidenceCount);
   }
 
   async listEvidence(caseId: string, guestHash: string): Promise<EvidenceListView> {
     const caseDoc = await this.getAccessibleCase(caseId, guestHash);
-    const evidenceDocs = await EvidenceModel.find({ caseId: caseDoc._id })
-      .sort({ exhibitNumber: 1 })
-      .exec();
+    const evidenceDocs = await findEvidenceByCaseId(caseDoc._id);
     return toEvidenceListView(evidenceDocs);
   }
 
   async getEvidence(evidenceId: string, guestHash: string): Promise<EvidenceDetail> {
-    const evidence = await EvidenceModel.findById(evidenceId).exec();
+    const evidence = await findEvidenceById(evidenceId);
     if (!evidence) {
       throw new AppError(404, "EVIDENCE_NOT_FOUND", "That exhibit was not found.");
     }
-    const caseDoc = await this.getAccessibleCase(evidence.caseId.toString(), guestHash);
-    if (evidence.caseId.toString() !== caseDoc._id.toString()) {
-      throw new AppError(404, "EVIDENCE_NOT_FOUND", "That exhibit was not found.");
-    }
+    const caseDoc = await this.getAccessibleCase(evidence.caseId, guestHash);
     return toEvidenceDetail(evidence, caseDoc.fictionNotice);
   }
 
@@ -327,12 +334,12 @@ export class CaseService {
     generationId: string,
     guestHash: string,
   ): Promise<GenerationStatusView> {
-    const job = await GenerationJobModel.findById(generationId).exec();
+    const job = await findGenerationJobById(generationId);
     if (!job) {
       throw new AppError(404, "NOT_FOUND", "That generation record was not found.");
     }
 
-    const caseDoc = await CaseModel.findById(job.caseId).exec();
+    const caseDoc = await findCaseById(job.caseId);
     if (!caseDoc) {
       throw new AppError(404, "NOT_FOUND", "That generation record was not found.");
     }
@@ -346,12 +353,8 @@ export class CaseService {
     return toGenerationStatusView(job);
   }
 
-  async getAccessibleCase(caseId: string, guestHash: string) {
-    if (!Types.ObjectId.isValid(caseId)) {
-      throw new AppError(404, "CASE_NOT_FOUND", "That case was not found.");
-    }
-
-    const caseDoc = await CaseModel.findById(caseId).exec();
+  async getAccessibleCase(caseId: string, guestHash: string): Promise<CaseDocument> {
+    const caseDoc = await findCaseById(caseId);
     if (!caseDoc) {
       throw new AppError(404, "CASE_NOT_FOUND", "That case was not found.");
     }
@@ -376,8 +379,8 @@ export class CaseService {
     return caseDoc;
   }
 
-  async getSolution(caseId: string) {
-    const solution = await SolutionModel.findOne({ caseId }).exec();
+  async getSolution(caseId: string): Promise<SolutionDocument> {
+    const solution = await findSolutionByCaseId(caseId);
     if (!solution) {
       throw new AppError(
         500,
@@ -390,81 +393,49 @@ export class CaseService {
 
   private async persistSampleCase(
     instantiated: InstantiatedSampleCase,
-    idempotencyOwner: string | undefined,
   ): Promise<void> {
     const { caseDoc, suspectDocs, evidenceDocs, solutionDoc } = instantiated;
-    const insertedSuspectIds = suspectDocs.map((suspect) => suspect._id);
-    const insertedEvidenceIds = evidenceDocs.map((evidence) => evidence._id);
 
-    try {
-      await SuspectModel.insertMany(suspectDocs);
-      await EvidenceModel.insertMany(evidenceDocs);
-      await SolutionModel.create(solutionDoc);
-      await GenerationJobModel.create({
-        _id: caseDoc.generationId,
-        caseId: caseDoc._id,
-        creatorSessionId: caseDoc.creatorSessionId,
-        status: "validating",
-        stage: "deterministic_validation_passed",
-        attempts: 1,
-        provider: "mock",
-        promptVersion: "sample-v1",
-      });
-      await CaseModel.create(caseDoc);
-      await CaseModel.updateOne(
-        { _id: caseDoc._id, status: "validating" },
-        { $set: { status: "ready" } },
-      ).exec();
-      await GenerationJobModel.updateOne(
-        { _id: caseDoc.generationId },
+    await getDatabase().transaction(async (database) => {
+      await insertCase(caseDoc, database);
+      await insertSuspects(suspectDocs, database);
+      await insertEvidence(evidenceDocs, database);
+      await insertSolution(solutionDoc, database);
+      await insertGenerationJob(
         {
-          $set: {
-            status: "ready",
-            stage: "published",
-            completedAt: new Date(),
-          },
+          _id: caseDoc.generationId,
+          caseId: caseDoc._id,
+          creatorSessionId: caseDoc.creatorSessionId,
+          status: "validating",
+          stage: "deterministic_validation_passed",
+          attempts: 1,
+          provider: "mock",
+          promptVersion: "sample-v1",
         },
-      ).exec();
-    } catch (error) {
-      this.logger.error(
-        {
-          err: error,
-          caseId: caseDoc._id.toString(),
-          idempotencyOwner: idempotencyOwner ? "present" : "none",
-        },
-        "cleaning up failed sample persistence",
+        database,
       );
-      await Promise.allSettled([
-        CaseModel.deleteOne({ _id: caseDoc._id }).exec(),
-        SolutionModel.deleteOne({ caseId: caseDoc._id }).exec(),
-        GenerationJobModel.deleteOne({ _id: caseDoc.generationId }).exec(),
-        EvidenceModel.deleteMany({ _id: { $in: insertedEvidenceIds } }).exec(),
-        SuspectModel.deleteMany({ _id: { $in: insertedSuspectIds } }).exec(),
-      ]);
-      throw error;
-    }
+      await updateCase(caseDoc._id, { status: "ready" }, database);
+      await updateGenerationJob(
+        caseDoc.generationId,
+        {
+          status: "ready",
+          stage: "published",
+          completedAt: new Date(),
+        },
+        database,
+      );
+    });
   }
 
-  private async toCreatedView(
-    caseDoc: HydratedDocument<CaseDocument>,
-  ): Promise<CaseCreatedView> {
+  private async toCreatedView(caseDoc: CaseDocument): Promise<CaseCreatedView> {
     const [suspectDocs, evidenceCount] = await Promise.all([
-      SuspectModel.find({ caseId: caseDoc._id }).exec(),
-      EvidenceModel.countDocuments({ caseId: caseDoc._id }).exec(),
+      findSuspectsByCaseId(caseDoc._id),
+      countEvidenceByCaseId(caseDoc._id),
     ]);
     return {
       case: toPublicCase(caseDoc, orderedSuspects(caseDoc, suspectDocs), evidenceCount),
-      generationId: caseDoc.generationId.toString(),
+      generationId: caseDoc.generationId,
       sample: caseDoc.isSample,
     };
   }
-}
-
-function isDuplicateKeyError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === 11000
-  );
 }

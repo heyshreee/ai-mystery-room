@@ -78,7 +78,7 @@ Generation currently runs in the API process, not a durable queue. At startup, `
 
 ### 8. Add committed browser and accessibility verification
 
-Playwright runs the built app against an ephemeral MongoDB and the built API/frontend. It covers the full sample journey, correct and incorrect accusations, custom generation, generation failure/retry, mobile layout, and solution isolation. Axe scans the main screens at desktop and mobile widths and asserts zero WCAG A/AA violations.
+Playwright runs the built app against an ephemeral PGlite database and the built API/frontend. It covers the full sample journey, correct and incorrect accusations, custom generation, generation failure/retry, mobile layout, and solution isolation. Axe scans the main screens at desktop and mobile widths and asserts zero WCAG A/AA violations.
 
 **Why:** Component tests cannot verify the integrated browser flow, polling behavior, responsive layout, or accessibility tree.
 

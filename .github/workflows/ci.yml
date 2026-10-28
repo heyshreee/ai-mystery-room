@@ -70,12 +70,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Cache MongoDB test binary
-        uses: actions/cache@v4
-        with:
-          path: backend/.cache/mongodb-binaries
-          key: mongodb-8.0.4-${{ runner.os }}
-
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:

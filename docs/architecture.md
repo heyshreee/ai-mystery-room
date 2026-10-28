@@ -9,7 +9,7 @@ AI Mystery Room is an npm-workspace monorepo with three packages:
 | Package | Responsibility |
 | --- | --- |
 | `shared` | Constants, Zod request schemas, and API view types shared by both runtimes |
-| `backend` | Express 5 API, MongoDB persistence via Mongoose, sample and generated case pipelines, scoring, authorization |
+| `backend` | Express 5 API, PostgreSQL persistence via `pg`, sample and generated case pipelines, scoring, authorization |
 | `frontend` | React 19 + Vite SPA for the landing page, case brief, generation progress, investigation room, and results |
 
 The backend is the only trusted boundary. It validates input, owns the solution, computes scores, and decides which fields leave the server. The frontend never receives the culprit or canonical solution before an authorized reveal.
@@ -20,10 +20,10 @@ Browser
   ▼
 Express app
   │  request ID → Helmet → CORS → origin guard → JSON limit → cookies → guest identity
-  │  global rate limit → route validation → service → Mongoose
+  │  global rate limit → route validation → service → repositories
   ▼
-MongoDB
-  Cases · Suspects · Evidence · Solutions · GameSessions · GenerationJobs
+PostgreSQL (isolated `amr` schema)
+  cases · suspects · evidence · solutions · game_sessions · generation_jobs
 ```
 
 ## Request lifecycle and foundation
@@ -44,7 +44,9 @@ MongoDB
 
 Configuration is loaded once at startup through a Zod schema (`backend/src/config/env.ts`). Missing or malformed values fail fast. The root `.env` is loaded server-side only; `VITE_API_BASE_URL` is the only client-visible configuration.
 
-At startup, after MongoDB connects and before the HTTP listener starts, `recoverInterruptedGenerations` marks unfinished in-process jobs and cases as failed and deletes partial suspects, evidence, or solutions. This makes a restart distinguishable from an indefinite “pending” state.
+At startup, the API creates a small `pg` pool, pings PostgreSQL, and applies the idempotent `amr` schema. It checks for the schema first, so the application role only needs `USAGE` and `CREATE` on `amr`, not permission to create schemas or databases. After the schema is ready and before the HTTP listener starts, `recoverInterruptedGenerations` marks unfinished in-process jobs and cases as failed and deletes partial suspects, evidence, or solutions. This makes a restart distinguishable from an indefinite “pending” state.
+
+Production connects through the Supabase transaction pooler on port `6543` with a per-instance pool capped at three connections. `DATABASE_SSL=no-verify` encrypts traffic but does not authenticate the pooler's self-signed certificate chain. Tests and E2E use PGlite over its TCP socket server, which exercises the same repository SQL without an external database.
 
 ## Runtime AI generation
 
@@ -83,9 +85,9 @@ Generated output becomes playable only after all of these pass:
 1. **Schema validation** — `caseBlueprintSchema` in `backend/src/generation/blueprint.ts` strictly validates the blueprint shape, categories, difficulty, references, and evidence formats.
 2. **Brief alignment** — category, difficulty, incident timeline window, and significant scenario terms must agree with the submitted brief.
 3. **Deterministic structural validation** — `validateCaseStructure` checks the mapped documents: suspect/evidence/timeline references, ordering, unique exhibit numbers, culprit membership, supporting evidence, and solution/hint leakage.
-4. **Persistence gate** — the case is marked `ready` only after suspects, evidence, and solution are saved. A failed persistence attempt cleans partial documents and marks the case failed.
+4. **Persistence gate** — the case is marked `ready` only after suspects, evidence, and solution are saved in one transaction. A failed persistence attempt rolls back and marks the case failed.
 
-The solution document is never serialized into public case or evidence DTOs. It is returned only by an authorized result endpoint after a completed accusation.
+The solution row is never serialized into public case or evidence DTOs. It is returned only by an authorized result endpoint after a completed accusation.
 
 ### Asynchronous job flow
 
@@ -115,7 +117,7 @@ Idempotency is scoped to the guest hash and request key. Concurrent duplicate su
 
 Jobs run inside the API process. They are **not** durable:
 
-- A restart interrupts active work. Startup recovery marks it failed and cleans partial documents, so a client can retry rather than polling forever.
+- A restart interrupts active work. Startup recovery marks it failed and cleans partial rows, so a client can retry rather than polling forever.
 - Multiple API replicas cannot safely share this model. A durable queue and worker ownership are required before horizontal scaling.
 
 ## Media
@@ -129,16 +131,18 @@ The evidence renderer falls back to the written exhibit if the image is missing 
 
 ## Data model
 
-| Collection | Purpose | Key relationships |
-| --- | --- | --- |
-| `cases` | Public case metadata, incident, rules, public timeline, ordering, status | References suspect/evidence IDs; stores creator and idempotency key; links one generation |
-| `suspects` | Public profiles, motives/opportunity summaries, statements, relationships | Belongs to one case |
-| `evidence` | Exhibit metadata and structured content (`chat`, `log`, `statement`, `document`, `image`, `transcript`, `generic`) | Belongs to one case; references timeline events and suspects |
-| `solutions` | Culprit, canonical timeline, motive/method/explanation, supporting evidence, hint texts | One per case; never serialized into public DTOs |
-| `gamesessions` | Guest-scoped progress: viewed evidence, hints used, accusation, score, status, expiry | References one case; stores only a token **hash** |
-| `generationjobs` | Status, stage, attempts, provider, prompt version, safe error code/message | References one case; never stores provider secrets or raw prompts |
+All tables live in the `amr` schema. Primary keys are `TEXT` values containing 24 lowercase hex characters, preserving the public API and cookie format used before the Postgres port. Nested structures are stored as `JSONB`; relationships that need integrity use foreign keys with `ON DELETE CASCADE`.
 
-Indexes enforce case/suspect/evidence lookups, one solution per case, unique exhibit numbers, and per-guest idempotency.
+| Table | Purpose | Key relationships |
+| --- | --- | --- |
+| `cases` | Public case metadata, incident, rules, public timeline, ordering, status | References suspect/evidence IDs in `JSONB`; stores creator and idempotency key; links one generation |
+| `suspects` | Public profiles, motives/opportunity summaries, statements, relationships | Belongs to one case via `case_id` |
+| `evidence` | Exhibit metadata and structured content (`chat`, `log`, `statement`, `document`, `image`, `transcript`, `generic`) | Belongs to one case; references timeline events and suspects |
+| `solutions` | Culprit, canonical timeline, motive/method/explanation, supporting evidence, hint texts | One per case (`case_id UNIQUE`); never serialized into public DTOs |
+| `game_sessions` | Guest-scoped progress: viewed evidence, hints used, accusation, score, status, expiry | References one case; stores only a token **hash** |
+| `generation_jobs` | Status, stage, attempts, provider, prompt version, safe error code/message | One per case; never stores provider secrets or raw prompts |
+
+Indexes cover case status/creation order, generation lookup, per-guest idempotency, suspects by case, evidence by case/type/occurrence, sessions by case/expiry and guest hash, and generation status. Unique constraints enforce one solution per case, one job per case, unique exhibit numbers per case, and one generation per case.
 
 ## Public/private boundary
 
@@ -150,13 +154,13 @@ Both sample and generated cases pass deterministic validation before publication
 - Canonical events that exist in the public timeline and do not place a suspect in two locations at once.
 - Evidence references, at least two supporting evidence items, and hints that do not name the culprit.
 
-Serialization is explicit in `backend/src/services/presenters.ts`; it does not spread Mongoose documents. In particular:
+Serialization is explicit in `backend/src/services/presenters.ts`; it does not spread database rows. In particular:
 
 - The public case DTO contains incident, rules, timeline, suspects, evidence count, and fiction notice — never `solution`, culprit ID, canonical timeline, or hints.
 - Evidence list responses contain metadata; detail responses add structured content.
 - Results are only returned by `POST /api/sessions/:id/accusations` and `GET /api/sessions/:id/results`, after session authentication and completion.
 
-This explicit mapping prevents Mongoose subdocument fields added in the future from leaking by default.
+This explicit mapping prevents database columns added in the future from leaking by default.
 
 ## Identity and authorization
 
@@ -171,12 +175,12 @@ Authorization rules:
 - Expired sessions are marked expired and return `410 SESSION_EXPIRED`.
 - Sample cases are public: any guest with the case ID can read the file. Custom cases and generation status are readable only by the creating guest.
 - Evidence and suspect IDs are always checked against the session's case, preventing cross-case references.
-- Accusations are one-shot. An atomic `findOneAndUpdate` transitions the session from `investigating` to `completed` while matching the guest hash, current hint count, and unexpired status. Concurrent accusations cannot overwrite the first result.
+- Accusations are one-shot. A conditional `UPDATE ... WHERE` transitions the session from `investigating` to `completed` while matching the guest hash, current hint count, and unexpired status. Concurrent accusations cannot overwrite the first result.
 - Results remain unavailable until the session is completed.
 
 ## Game engine
 
-The sample fixture (`backend/src/services/sample-case.ts`) is instantiated with fresh ObjectIds, validated, and persisted. `POST /api/cases` with `{ "sample": true }`:
+The sample fixture (`backend/src/services/sample-case.ts`) is instantiated with fresh 24-character hex IDs, validated, and persisted. `POST /api/cases` with `{ "sample": true }`:
 
 1. Optionally looks up an existing case by `(creator guest hash, Idempotency-Key)`.
 2. Instantiates a new sample case with a completed mock generation job.
@@ -188,7 +192,7 @@ Generated cases use the same validation and persistence boundary after provider 
 
 Gameplay rules live server-side:
 
-- Viewed evidence is recorded with `$addToSet` and must belong to the session's case.
+- Viewed evidence is appended to a `JSONB` array only when absent, in one conditional update, and must belong to the session's case.
 - Hints increment atomically up to the configured limit (default 3); hint text comes from the solution and is never included in the case payload.
 - Score = `100` for a correct accusation, minus `10` per hint, clamped at `0`; incorrect accusations score `0`.
 - The result includes the selected suspect, culprit profile, motive/method/explanation, supporting evidence summaries, score breakdown, and completion time.
@@ -212,7 +216,8 @@ The API client (`frontend/src/lib/api.ts`) always sends credentials, unwraps the
 
 ## Verification
 
-- Backend unit/integration tests cover the generation pipeline, validation, retries, failures, idempotency, ownership, restart recovery, and runtime provider behavior with a mocked HTTP server.
+- Backend unit/integration tests run the real Express app and repositories against PGlite over a TCP socket. They cover the generation pipeline, validation, retries, failures, idempotency, ownership, restart recovery, and runtime provider behavior with a mocked HTTP server.
+- The production database path was smoke-tested against the Supabase transaction pooler: schema initialization, sample play, hints, accusation/results, 404s, custom mock generation to `ready`, and cleanup.
 - Frontend tests cover the generation polling flow, failure/retry behavior, duplicate-submission locking, image fallback, and API error mapping.
 - Playwright E2E covers the full sample journey, correct and incorrect accusations with reveal, custom generation, generation failure/retry UI, mobile layout, and solution isolation.
 - Axe checks run against the landing, creation, investigation, accusation dialog, and results screens at desktop and mobile widths.
@@ -224,4 +229,6 @@ The API client (`frontend/src/lib/api.ts`) always sends credentials, unwraps the
 - **No live media**: image exhibits use a static fictional SVG or written text. TTS and video are not implemented.
 - **Single-process rate limiting**: limits are in-memory and reset on restart. A multi-instance deployment needs a shared store (e.g. Redis).
 - **Guest identity, not accounts**: progress is tied to cookies. Clearing cookies loses access to private sessions and cases.
+- **Startup DDL, not migrations**: schema creation is idempotent, but a destructive or data-transforming change needs a versioned migration process.
+- **Pooler certificate not verified**: Supabase's pooler currently presents a self-signed chain, so production uses `no-verify`. Traffic is encrypted, but the server is not authenticated by certificate.
 - **No load/performance or visual-regression tests** yet.

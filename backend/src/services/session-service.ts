@@ -1,4 +1,3 @@
-import type { HydratedDocument } from "mongoose";
 import type {
   GameSessionView,
   HintView,
@@ -8,12 +7,28 @@ import type { AppConfig } from "../config/env.js";
 import type { Logger } from "../utils/logger.js";
 import { AppError } from "../utils/errors.js";
 import { generateOpaqueToken, sessionTokenHash } from "../utils/hash.js";
+import { newId } from "../utils/ids.js";
 import type { SessionCredential } from "../middleware/identity.js";
-import { CaseModel } from "../models/Case.js";
-import { EvidenceModel } from "../models/Evidence.js";
-import { GameSessionModel, type GameSessionDocument } from "../models/GameSession.js";
-import { SolutionModel, type SolutionDocument } from "../models/Solution.js";
-import { SuspectModel } from "../models/Suspect.js";
+import type { GameSessionDocument } from "../models/GameSession.js";
+import type { SolutionDocument } from "../models/Solution.js";
+import { findCaseById } from "../repositories/cases.js";
+import {
+  findEvidenceByIdAndCaseId,
+  findEvidenceByIdsAndCaseId,
+} from "../repositories/evidence.js";
+import {
+  addViewedEvidence,
+  completeGameSession,
+  findGameSessionByIdAndHash,
+  incrementHintsUsed,
+  insertGameSession,
+  markGameSessionExpired,
+} from "../repositories/game-sessions.js";
+import { findSolutionByCaseId } from "../repositories/solutions.js";
+import {
+  findSuspectByIdAndCaseId,
+  findSuspectsByCaseId,
+} from "../repositories/suspects.js";
 import type { CaseService } from "./case-service.js";
 import { calculateScore } from "./scoring.js";
 import { toResultView, toSessionView } from "./presenters.js";
@@ -46,7 +61,8 @@ export class SessionService {
     const caseDoc = await this.caseService.getAccessibleCase(caseId, guestHash);
     const sessionToken = generateOpaqueToken();
     const now = new Date();
-    const session = await GameSessionModel.create({
+    const session: GameSessionDocument = {
+      _id: newId(),
       caseId: caseDoc._id,
       guestTokenHash: sessionTokenHash(this.config.sessionSecret, sessionToken),
       status: "investigating",
@@ -54,12 +70,14 @@ export class SessionService {
       hintsUsed: 0,
       startedAt: now,
       expiresAt: new Date(now.getTime() + this.config.sessionTtlMs),
-    });
+    };
+
+    await insertGameSession(session);
 
     this.logger.info(
       {
-        sessionId: session._id.toString(),
-        caseId: caseDoc._id.toString(),
+        sessionId: session._id,
+        caseId: caseDoc._id,
       },
       "game session created",
     );
@@ -86,24 +104,16 @@ export class SessionService {
     const session = await this.authenticate(sessionId, credential);
     this.assertInvestigating(session);
 
-    const evidence = await EvidenceModel.findOne({
-      _id: evidenceId,
-      caseId: session.caseId,
-    }).exec();
+    const evidence = await findEvidenceByIdAndCaseId(evidenceId, session.caseId);
     if (!evidence) {
       throw new AppError(404, "EVIDENCE_NOT_FOUND", "That exhibit was not found.");
     }
 
-    const updated = await GameSessionModel.findOneAndUpdate(
-      {
-        _id: session._id,
-        guestTokenHash: session.guestTokenHash,
-        status: "investigating",
-        expiresAt: { $gt: new Date() },
-      },
-      { $addToSet: { viewedEvidenceIds: evidence._id } },
-      { returnDocument: "after" },
-    ).exec();
+    const updated = await addViewedEvidence(
+      session._id,
+      session.guestTokenHash,
+      evidence._id,
+    );
 
     if (!updated) {
       const latest = await this.authenticate(sessionId, credential);
@@ -129,17 +139,11 @@ export class SessionService {
       throw hintLimitError();
     }
 
-    const updated = await GameSessionModel.findOneAndUpdate(
-      {
-        _id: session._id,
-        guestTokenHash: session.guestTokenHash,
-        status: "investigating",
-        expiresAt: { $gt: new Date() },
-        hintsUsed: { $lt: this.config.hintLimit },
-      },
-      { $inc: { hintsUsed: 1 } },
-      { returnDocument: "after" },
-    ).exec();
+    const updated = await incrementHintsUsed(
+      session._id,
+      session.guestTokenHash,
+      this.config.hintLimit,
+    );
 
     if (!updated) {
       const latest = await this.authenticate(sessionId, credential);
@@ -150,11 +154,11 @@ export class SessionService {
       throw new AppError(500, "INTERNAL_ERROR", "The hint could not be recorded.");
     }
 
-    const solution = await SolutionModel.findOne({ caseId: updated.caseId }).exec();
+    const solution = await findSolutionByCaseId(updated.caseId);
     const hint = solution?.hintTexts[updated.hintsUsed - 1];
     if (!solution || !hint) {
       this.logger.error(
-        { sessionId: updated._id.toString(), hintsUsed: updated.hintsUsed },
+        { sessionId: updated._id, hintsUsed: updated.hintsUsed },
         "hint text missing for validated case",
       );
       throw new AppError(500, "INTERNAL_ERROR", "The hint is unavailable.");
@@ -176,10 +180,7 @@ export class SessionService {
     const initialSession = await this.authenticate(sessionId, credential);
     this.assertInvestigating(initialSession);
 
-    const suspect = await SuspectModel.findOne({
-      _id: suspectId,
-      caseId: initialSession.caseId,
-    }).exec();
+    const suspect = await findSuspectByIdAndCaseId(suspectId, initialSession.caseId);
     if (!suspect) {
       throw new AppError(
         400,
@@ -188,39 +189,29 @@ export class SessionService {
       );
     }
 
-    const solution = await this.caseService.getSolution(initialSession.caseId.toString());
-    const isCorrect = solution.culpritSuspectId.equals(suspect._id);
+    const solution = await this.caseService.getSolution(initialSession.caseId);
+    const isCorrect = solution.culpritSuspectId === suspect._id;
 
     let session = initialSession;
     for (let attempt = 0; attempt < ACCUSATION_RETRY_LIMIT; attempt += 1) {
       const score = calculateScore(isCorrect, session.hintsUsed);
       const now = new Date();
-      const updated = await GameSessionModel.findOneAndUpdate(
-        {
-          _id: session._id,
-          guestTokenHash: session.guestTokenHash,
-          status: "investigating",
-          hintsUsed: session.hintsUsed,
-          expiresAt: { $gt: now },
-        },
-        {
-          $set: {
-            status: "completed",
-            accusationSuspectId: suspect._id,
-            isCorrect,
-            score: score.total,
-            scoreBreakdown: score,
-            completedAt: now,
-          },
-        },
-        { returnDocument: "after" },
-      ).exec();
+      const updated = await completeGameSession({
+        id: session._id,
+        guestTokenHash: session.guestTokenHash,
+        expectedHintsUsed: session.hintsUsed,
+        accusationSuspectId: suspect._id,
+        isCorrect,
+        score: score.total,
+        scoreBreakdown: score,
+        completedAt: now,
+      });
 
       if (updated) {
         this.logger.info(
           {
-            sessionId: updated._id.toString(),
-            caseId: updated.caseId.toString(),
+            sessionId: updated._id,
+            caseId: updated.caseId,
             correct: isCorrect,
             score: score.total,
             hintsUsed: updated.hintsUsed,
@@ -272,7 +263,7 @@ export class SessionService {
       );
     }
 
-    const solution = await this.caseService.getSolution(session.caseId.toString());
+    const solution = await this.caseService.getSolution(session.caseId);
     return this.buildResult(session, solution);
   }
 
@@ -284,10 +275,10 @@ export class SessionService {
       throw sessionNotFoundError();
     }
 
-    const session = await GameSessionModel.findOne({
-      _id: sessionId,
-      guestTokenHash: sessionTokenHash(this.config.sessionSecret, credential.token),
-    }).exec();
+    const session = await findGameSessionByIdAndHash(
+      sessionId,
+      sessionTokenHash(this.config.sessionSecret, credential.token),
+    );
 
     if (!session) {
       throw sessionNotFoundError();
@@ -295,10 +286,7 @@ export class SessionService {
 
     if (session.status === "expired" || session.expiresAt.getTime() <= Date.now()) {
       if (session.status !== "expired") {
-        await GameSessionModel.updateOne(
-          { _id: session._id, status: { $ne: "expired" } },
-          { $set: { status: "expired" } },
-        ).exec();
+        await markGameSessionExpired(session._id);
       }
       throw new AppError(
         410,
@@ -329,7 +317,7 @@ export class SessionService {
 
   private async buildResult(
     session: GameSessionDocument,
-    solution: HydratedDocument<SolutionDocument>,
+    solution: SolutionDocument,
   ): Promise<ResultView> {
     if (!session.completedAt || !session.accusationSuspectId) {
       throw new AppError(
@@ -340,20 +328,14 @@ export class SessionService {
     }
 
     const [caseDoc, suspects, selected, supportingEvidence] = await Promise.all([
-      CaseModel.findById(session.caseId).exec(),
-      SuspectModel.find({ caseId: session.caseId }).exec(),
-      SuspectModel.findOne({
-        _id: session.accusationSuspectId,
-        caseId: session.caseId,
-      }).exec(),
-      EvidenceModel.find({
-        _id: { $in: solution.supportingEvidenceIds },
-        caseId: session.caseId,
-      }).exec(),
+      findCaseById(session.caseId),
+      findSuspectsByCaseId(session.caseId),
+      findSuspectByIdAndCaseId(session.accusationSuspectId, session.caseId),
+      findEvidenceByIdsAndCaseId(solution.supportingEvidenceIds, session.caseId),
     ]);
 
-    const culprit = suspects.find((suspect) =>
-      suspect._id.equals(solution.culpritSuspectId),
+    const culprit = suspects.find(
+      (suspect) => suspect._id === solution.culpritSuspectId,
     );
 
     if (!caseDoc || !culprit || !selected) {
@@ -365,10 +347,10 @@ export class SessionService {
     }
 
     const evidenceById = new Map(
-      supportingEvidence.map((evidence) => [evidence._id.toString(), evidence] as const),
+      supportingEvidence.map((evidence) => [evidence._id, evidence] as const),
     );
     const orderedSupportingEvidence = solution.supportingEvidenceIds
-      .map((id) => evidenceById.get(id.toString()))
+      .map((id) => evidenceById.get(id))
       .filter((evidence): evidence is (typeof supportingEvidence)[number] =>
         Boolean(evidence),
       );

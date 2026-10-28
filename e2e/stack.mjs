@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { PGlite } from "@electric-sql/pglite";
+import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 
 const root = resolve(import.meta.dirname, "..");
 const backendEntry = resolve(root, "backend/dist/server.js");
@@ -23,6 +24,8 @@ for (const [label, path] of [
 
 const children = [];
 let shuttingDown = false;
+let pglite;
+let socketServer;
 
 function start(label, command, args, options) {
   const child = spawn(command, args, {
@@ -47,7 +50,8 @@ async function shutdown(code) {
   for (const child of children) {
     child.kill("SIGTERM");
   }
-  await mongo.stop().catch(() => undefined);
+  await socketServer?.stop().catch(() => undefined);
+  await pglite?.close().catch(() => undefined);
   process.exit(code);
 }
 
@@ -58,15 +62,23 @@ process.on("SIGINT", () => {
   void shutdown(0);
 });
 
-process.env.MONGOMS_DOWNLOAD_DIR ??= resolve(
-  root,
-  "backend/.cache/mongodb-binaries",
-);
-process.env.MONGOMS_VERSION ??= "8.0.4";
-const mongo = await MongoMemoryServer.create({
-  binary: { version: "8.0.4" },
-  instance: { dbName: "amr_e2e" },
+pglite = await PGlite.create();
+socketServer = new PGLiteSocketServer({
+  db: pglite,
+  host: "127.0.0.1",
+  port: 0,
+  maxConnections: 10,
 });
+await socketServer.start();
+
+const serverConn = socketServer.getServerConn();
+const separator = serverConn.lastIndexOf(":");
+if (separator < 0) {
+  throw new Error(`[e2e] Unexpected PGlite socket address: ${serverConn}`);
+}
+const host = serverConn.slice(0, separator);
+const port = serverConn.slice(separator + 1);
+const databaseUrl = `postgresql://postgres:postgres@${host}:${port}/postgres`;
 
 start("backend", process.execPath, [backendEntry], {
   cwd: root,
@@ -74,7 +86,8 @@ start("backend", process.execPath, [backendEntry], {
     ...process.env,
     NODE_ENV: "test",
     PORT: "4000",
-    MONGODB_URI: mongo.getUri("amr_e2e"),
+    DATABASE_URL: databaseUrl,
+    DATABASE_SSL: "disable",
     SESSION_SECRET: "e2e_session_secret_that_is_longer_than_thirty_two_characters",
     FRONTEND_ORIGIN: "http://127.0.0.1:4173,http://localhost:4173",
     LOG_LEVEL: "warn",
